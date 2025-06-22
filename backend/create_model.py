@@ -338,6 +338,16 @@ class RuleBasedStalenessDetector:
         try:
             audit_records = ci_data.get('audit_records', [])
             assigned_owner = ci_data.get('assigned_owner', '')
+            username_to_display_name = ci_data.get('username_to_display_name', {})
+            
+            # Get user data for department lookup
+            user_info_lookup = {}
+            if 'user_info' in ci_data:
+                # This is the user info for the assigned owner, but we need all users
+                pass
+            
+            # Build user lookup from audit records and try to match with user data
+            # We'll need to get user data from the broader context
             
             if not audit_records:
                 return None
@@ -397,13 +407,24 @@ class RuleBasedStalenessDetector:
                         consistency = data['count'] / activity_span
                         score += min(consistency * 10, 10)
 
+                # Get display name for this user
+                display_name = username_to_display_name.get(user, user)
+                
+                # Get department info - we'll get this from the broader user data context
+                department = 'Unknown'
+                user_data_context = ci_data.get('user_data_context', {})
+                if user in user_data_context:
+                    department = user_data_context[user].get('department', 'Unknown')
+
                 user_scores.append({
                     'user': user,
+                    'display_name': display_name,
                     'score': score,
                     'activity_count': data['count'],
                     'last_activity_days_ago': (datetime.now() - data['last_activity']).days if data['last_activity'] else 999,
                     'fields_modified': len(data['fields']),
-                    'ownership_changes': len(data['fields'].intersection(ownership_fields))
+                    'ownership_changes': len(data['fields'].intersection(ownership_fields)),
+                    'department': department
                 })
 
             # Sort by score descending and return top recommendations
@@ -415,7 +436,7 @@ class RuleBasedStalenessDetector:
         except Exception as e:
             return None
 
-    def get_stale_ci_list(self, labels_df, audit_df, user_df, ci_df):
+    def get_stale_ci_list(self, labels_df, audit_df, user_df, ci_df, ci_owner_display_names=None):
         """
         Analyze all CIs and return a list of stale CIs with confidence and risk level.
         Args:
@@ -423,10 +444,14 @@ class RuleBasedStalenessDetector:
             audit_df: DataFrame of audit records
             user_df: DataFrame of user records
             ci_df: DataFrame of CI records
+            ci_owner_display_names: Dict mapping CI IDs to owner display names
         Returns:
             List of dicts, each representing a stale CI with confidence and risk_level
         """
         stale_cis = []
+        if ci_owner_display_names is None:
+            ci_owner_display_names = {}
+            
         # Build lookup for audit and user data
         audit_by_ci = {}
         for _, row in audit_df.iterrows():
@@ -437,9 +462,15 @@ class RuleBasedStalenessDetector:
         
         # Convert user and CI data to regular dicts
         user_by_name = {}
+        username_to_display_name = {}  # Create mapping for display names
         for _, u in user_df.iterrows():
+            user_dict = {k: v for k, v in u.to_dict().items()}
             if u.get('user_name'):
-                user_by_name[str(u.get('user_name'))] = {k: v for k, v in u.to_dict().items()}
+                user_name = str(u.get('user_name'))
+                user_by_name[user_name] = user_dict
+                # Map username to display name
+                display_name = str(u.get('name', user_name))  # Use 'name' field as display name, fallback to username
+                username_to_display_name[user_name] = display_name
         
         ci_by_id = {}
         for _, ci in ci_df.iterrows():
@@ -460,7 +491,9 @@ class RuleBasedStalenessDetector:
                 'ci_info': ci_info,
                 'audit_records': audit_records,
                 'user_info': user_info,
-                'assigned_owner': assigned_owner
+                'assigned_owner': assigned_owner,
+                'username_to_display_name': username_to_display_name,  # Pass the mapping
+                'user_data_context': user_by_name  # Pass all user data for department lookup
             }
             
             result = self.predict_single(ci_data)
@@ -477,12 +510,19 @@ class RuleBasedStalenessDetector:
                     risk_level = 'Low'
                 
                 # Ensure all data is JSON serializable
+                # Get the display name for the current owner - try CI mapping first, then username mapping
+                current_owner_display_name = (
+                    ci_owner_display_names.get(str(ci_id)) or 
+                    username_to_display_name.get(str(assigned_owner), str(assigned_owner))
+                )
+                
                 stale_ci_dict = {
                     'ci_id': str(ci_id),
                     'ci_name': str(ci_info.get('name', 'Unknown')),
                     'ci_class': str(ci_info.get('sys_class_name', 'Unknown')),
                     'ci_description': str(ci_info.get('short_description', '')),
-                    'current_owner': str(assigned_owner),
+                    'current_owner': current_owner_display_name,
+                    'current_owner_username': str(assigned_owner),  # Keep username for technical reference
                     'confidence': float(confidence),
                     'risk_level': str(risk_level),
                     'staleness_reasons': [
@@ -497,9 +537,9 @@ class RuleBasedStalenessDetector:
                     'days_since_owner_activity': int(result.get('features', {}).get('days_since_owner_activity', 999)),
                     'owner_active': bool(result.get('features', {}).get('owner_active', True))
                 }
-                
+
                 stale_cis.append(stale_ci_dict)
-                
+
         return stale_cis
 
     def _format_owner_recommendations(self, recommendations):
@@ -512,13 +552,13 @@ class RuleBasedStalenessDetector:
             # Old format - single recommendation
             return [{
                 'username': str(recommendations.get('user', '')),
-                'display_name': str(recommendations.get('user', '')),
+                'display_name': str(recommendations.get('display_name', recommendations.get('user', ''))),
                 'score': int(recommendations.get('score', 0)),
                 'activity_count': int(recommendations.get('activity_count', 0)),
                 'last_activity_days_ago': int(recommendations.get('last_activity_days_ago', 999)),
                 'ownership_changes': int(recommendations.get('ownership_changes', 0)),
                 'fields_modified': int(recommendations.get('fields_modified', 0)),
-                'department': 'Unknown'
+                'department': str(recommendations.get('department', 'Unknown'))
             }]
         elif isinstance(recommendations, list):
             # New format - multiple recommendations
@@ -526,13 +566,13 @@ class RuleBasedStalenessDetector:
             for rec in recommendations:
                 formatted_recommendations.append({
                     'username': str(rec.get('user', '')),
-                    'display_name': str(rec.get('user', '')),
+                    'display_name': str(rec.get('display_name', rec.get('user', ''))),
                     'score': int(rec.get('score', 0)),
                     'activity_count': int(rec.get('activity_count', 0)),
                     'last_activity_days_ago': int(rec.get('last_activity_days_ago', 999)),
                     'ownership_changes': int(rec.get('ownership_changes', 0)),
                     'fields_modified': int(rec.get('fields_modified', 0)),
-                    'department': 'Unknown'
+                    'department': str(rec.get('department', 'Unknown'))
                 })
             return formatted_recommendations
         
