@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database, ChevronUp } from 'lucide-react';
+import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database, ChevronUp, ChevronLeft, MoreHorizontal } from 'lucide-react';
 
 // Aceternity UI Components
 
@@ -156,6 +156,10 @@ const ServiceNowScanner = () => {
   const [scanProgress, setScanProgress] = useState(0);
   const [expandedCI, setExpandedCI] = useState(null);
   const [showGroupedView, setShowGroupedView] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(50);
+  const [expandedAlternates, setExpandedAlternates] = useState(new Set());
+  const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'critical', 'high', 'medium', 'low'
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -280,6 +284,75 @@ const ServiceNowScanner = () => {
   const toggleCIExpansion = (ciId) => {
     setExpandedCI(expandedCI === ciId ? null : ciId);
   };
+
+  // Pagination logic
+  const getPaginatedCIs = () => {
+    const filteredCIs = getFilteredCIs();
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return filteredCIs.slice(startIndex, endIndex);
+  };
+
+  const getFilteredCIs = () => {
+    if (!scanResults || !scanResults.stale_cis || !Array.isArray(scanResults.stale_cis)) return [];
+    
+    if (activeFilter === 'all') {
+      return scanResults.stale_cis;
+    }
+    
+    return scanResults.stale_cis.filter(ci => {
+      const riskLevel = ci.risk_level ? ci.risk_level.toLowerCase() : '';
+      return riskLevel === activeFilter;
+    });
+  };
+
+  const getTotalPages = () => {
+    const filteredCIs = getFilteredCIs();
+    if (!filteredCIs || filteredCIs.length === 0) return 0;
+    return Math.ceil(filteredCIs.length / itemsPerPage);
+  };
+
+  const setFilter = (filter) => {
+    setActiveFilter(filter);
+    setCurrentPage(1); // Reset to first page when filter changes
+    setExpandedCI(null); // Close any expanded CI
+    setExpandedAlternates(new Set()); // Clear expanded alternates
+  };
+
+  const goToPage = (page) => {
+    setCurrentPage(page);
+    setExpandedCI(null); // Close any expanded CI when changing pages
+  };
+
+  const goToNextPage = () => {
+    if (currentPage < getTotalPages()) {
+      goToPage(currentPage + 1);
+    }
+  };
+
+  const goToPrevPage = () => {
+    if (currentPage > 1) {
+      goToPage(currentPage - 1);
+    }
+  };
+
+  const toggleAlternateRecommendations = (ciId) => {
+    const newExpanded = new Set(expandedAlternates);
+    if (newExpanded.has(ciId)) {
+      newExpanded.delete(ciId);
+    } else {
+      newExpanded.add(ciId);
+    }
+    setExpandedAlternates(newExpanded);
+  };
+
+  // Reset pagination when new results come in
+  useEffect(() => {
+    setCurrentPage(1);
+    setExpandedCI(null);
+    setExpandedAlternates(new Set());
+    setActiveFilter('all');
+  }, [scanResults]);
 
   return (
     <div className="min-h-screen bg-black relative overflow-hidden">
@@ -516,40 +589,64 @@ const ServiceNowScanner = () => {
                       {[
                         {
                           title: "Total CIs",
-                          value: scanResults.summary?.total_cis_analyzed || 0,
+                          value: (scanResults && scanResults.summary) ? (scanResults.summary.total_cis_analyzed || 0) : 0,
                           icon: Server,
-                          color: "text-blue-400"
+                          color: "text-blue-400",
+                          filter: null, // Not filterable
+                          clickable: false
                         },
                         {
                           title: "Stale Found",
-                          value: scanResults.summary?.stale_cis_found || 0,
+                          value: (scanResults && scanResults.summary) ? (scanResults.summary.stale_cis_found || 0) : 0,
                           icon: AlertTriangle,
-                          color: "text-red-400"
+                          color: "text-red-400",
+                          filter: "all",
+                          clickable: true
                         },
                         {
                           title: "Critical Risk",
-                          value: scanResults.summary?.critical_risk || 0,
+                          value: (scanResults && scanResults.summary) ? (scanResults.summary.critical_risk || 0) : 0,
                           icon: AlertCircle,
-                          color: "text-red-400"
+                          color: "text-red-400",
+                          filter: "critical",
+                          clickable: true
                         },
                         {
                           title: "High Risk",
-                          value: scanResults.summary?.high_risk || 0,
+                          value: (scanResults && scanResults.summary) ? (scanResults.summary.high_risk || 0) : 0,
                           icon: TrendingUp,
-                          color: "text-orange-400"
+                          color: "text-orange-400",
+                          filter: "high",
+                          clickable: true
                         },
                         {
                           title: "Recommended Owners",
-                          value: scanResults.summary?.recommended_owners_count || 0,
+                          value: (scanResults && scanResults.summary) ? (scanResults.summary.recommended_owners_count || 0) : 0,
                           icon: Users,
-                          color: "text-green-400"
+                          color: "text-green-400",
+                          filter: null, // Not filterable
+                          clickable: false
                         }
-                      ].map(({ title, value, icon: Icon, color }) => (
+                      ].map(({ title, value, icon: Icon, color, filter, clickable }) => (
                         <CardContainer key={title}>
-                          <div className="p-6 h-full flex items-center justify-between">
+                          <div 
+                            className={`p-6 h-full flex items-center justify-between transition-all duration-200 ${
+                              clickable 
+                                ? `cursor-pointer hover:bg-white/5 ${
+                                    activeFilter === filter ? 'bg-white/10 ring-2 ring-purple-500/50' : ''
+                                  }` 
+                                : ''
+                            }`}
+                            onClick={clickable ? () => setFilter(filter) : undefined}
+                          >
                             <div>
                               <p className="text-gray-400 text-sm">{title}</p>
                               <p className={`text-2xl font-bold ${color}`}>{value}</p>
+                              {clickable && (
+                                <p className="text-xs text-gray-500 mt-1">
+                                  {activeFilter === filter ? 'Filtered' : 'Click to filter'}
+                                </p>
+                              )}
                             </div>
                             <Icon className={`w-8 h-8 ${color}`} />
                           </div>
@@ -558,7 +655,7 @@ const ServiceNowScanner = () => {
                     </div>
 
                     {/* Toggle Button for Grouped View */}
-                    {scanResults.grouped_by_owners && scanResults.grouped_by_owners.length > 0 && (
+                    {scanResults && scanResults.grouped_by_owners && Array.isArray(scanResults.grouped_by_owners) && scanResults.grouped_by_owners.length > 0 && (
                       <div className="flex justify-center mb-6">
                         <button
                           onClick={() => setShowGroupedView(!showGroupedView)}
@@ -578,16 +675,40 @@ const ServiceNowScanner = () => {
                     <CardContainer>
                       <div className="overflow-hidden">
                         <div className="p-6 border-b border-white/10">
-                          <h3 className="text-2xl font-bold text-white flex items-center">
-                            <Database className="w-6 h-6 mr-3 text-purple-400" />
-                            Stale Configuration Items
-                          </h3>
-                          <p className="text-gray-400 mt-2">Click on any CI to view detailed analysis and recommendations</p>
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <h3 className="text-2xl font-bold text-white flex items-center">
+                                <Database className="w-6 h-6 mr-3 text-purple-400" />
+                                Stale Configuration Items
+                                {activeFilter !== 'all' && (
+                                  <span className="ml-3 px-3 py-1 bg-purple-500/20 text-purple-300 rounded-full text-sm font-medium">
+                                    {activeFilter.charAt(0).toUpperCase() + activeFilter.slice(1)} Risk Only
+                                  </span>
+                                )}
+                              </h3>
+                              <p className="text-gray-400 mt-2">
+                                {activeFilter === 'all' 
+                                  ? 'Click on any CI to view detailed analysis and recommendations' 
+                                  : `Showing ${getFilteredCIs().length} ${activeFilter} risk CIs. Click summary cards above to change filter.`
+                                }
+                              </p>
+                            </div>
+                            
+                            {activeFilter !== 'all' && (
+                              <button
+                                onClick={() => setFilter('all')}
+                                className="px-4 py-2 bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white rounded-lg transition-all text-sm flex items-center space-x-2"
+                              >
+                                <span>Clear Filter</span>
+                                <span className="text-xs bg-white/20 px-2 py-1 rounded">Show All</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
                         
-                        {scanResults.stale_cis && scanResults.stale_cis.length > 0 ? (
+                        {scanResults && scanResults.stale_cis && scanResults.stale_cis.length > 0 ? (
                           <div className="space-y-0">
-                            {scanResults.stale_cis.map((ci, idx) => (
+                            {getPaginatedCIs().map((ci, idx) => (
                               <div key={ci.ci_id} className="border-b border-white/10 last:border-b-0">
                                 {/* CI List Item */}
                                 <div 
@@ -643,14 +764,14 @@ const ServiceNowScanner = () => {
                                           Why This CI is Stale
                                         </h5>
                                         <div className="space-y-3">
-                                          {ci.staleness_reasons.map((reason, reasonIdx) => (
+                                          {ci.staleness_reasons && ci.staleness_reasons.map((reason, reasonIdx) => (
                                             <div key={reasonIdx} className="bg-white/5 p-3 rounded-lg border border-white/10">
                                               <div className="flex items-center justify-between mb-2">
                                                 <span className="text-purple-300 font-medium">
-                                                  {reason.rule_name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                                  {reason.rule_name && reason.rule_name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                                                 </span>
                                                 <span className="text-xs text-gray-400">
-                                                  {(reason.confidence * 100).toFixed(0)}% confidence
+                                                  {reason.confidence && (reason.confidence * 100).toFixed(0)}% confidence
                                                 </span>
                                               </div>
                                               <p className="text-gray-300 text-sm">{reason.description}</p>
@@ -667,12 +788,12 @@ const ServiceNowScanner = () => {
                                           <div className="grid grid-cols-2 gap-4 text-sm">
                                             <div>
                                               <span className="text-gray-400">Activities: </span>
-                                              <span className="text-white">{ci.owner_activity_count}</span>
+                                              <span className="text-white">{ci.owner_activity_count || 0}</span>
                                             </div>
                                             <div>
                                               <span className="text-gray-400">Last Activity: </span>
                                               <span className="text-white">
-                                                {ci.days_since_owner_activity === 999 ? 'Never' : `${ci.days_since_owner_activity} days ago`}
+                                                {ci.days_since_owner_activity === 999 ? 'Never' : `${ci.days_since_owner_activity || 0} days ago`}
                                               </span>
                                             </div>
                                             <div>
@@ -694,51 +815,150 @@ const ServiceNowScanner = () => {
                                         
                                         {ci.recommended_owners && ci.recommended_owners.length > 0 ? (
                                           <div className="space-y-3">
-                                            {ci.recommended_owners.slice(0, 3).map((owner, ownerIdx) => (
-                                              <div key={ownerIdx} className="bg-white/5 p-3 rounded-lg border border-white/10">
-                                                <div className="flex items-center justify-between mb-2">
-                                                  <div>
-                                                    <div className="text-green-300 font-medium">{owner.display_name}</div>
-                                                    <div className="text-xs text-gray-400">{owner.username}</div>
-                                                  </div>
-                                                  <div className="text-right">
-                                                    <div className="text-green-400 font-bold">{owner.score}/100</div>
-                                                    <div className="text-xs text-gray-400">Match Score</div>
-                                                  </div>
+                                            {/* Primary Recommendation */}
+                                            <div className="bg-white/5 p-3 rounded-lg border border-white/10">
+                                              <div className="flex items-center justify-between mb-2">
+                                                <div>
+                                                  <div className="text-green-300 font-medium">{ci.recommended_owners[0].display_name}</div>
+                                                  <div className="text-xs text-gray-400">{ci.recommended_owners[0].username}</div>
                                                 </div>
-                                                
-                                                <div className="grid grid-cols-2 gap-2 text-xs text-gray-300">
-                                                  <div>
-                                                    <span className="text-gray-400">Activities: </span>
-                                                    {owner.activity_count}
-                                                  </div>
-                                                  <div>
-                                                    <span className="text-gray-400">Last Seen: </span>
-                                                    {owner.last_activity_days_ago === 999 ? 'Never' : `${owner.last_activity_days_ago}d ago`}
-                                                  </div>
-                                                  <div>
-                                                    <span className="text-gray-400">Ownership Changes: </span>
-                                                    {owner.ownership_changes}
-                                                  </div>
-                                                  <div>
-                                                    <span className="text-gray-400">Fields Modified: </span>
-                                                    {owner.fields_modified}
-                                                  </div>
+                                                <div className="text-right">
+                                                  <div className="text-green-400 font-bold">{ci.recommended_owners[0].score}/100</div>
+                                                  <div className="text-xs text-gray-400">Top Match</div>
                                                 </div>
-                                                
-                                                {owner.department && (
-                                                  <div className="mt-2 text-xs text-gray-400">
-                                                    Department: {owner.department}
+                                              </div>
+                                              
+                                              <div className="grid grid-cols-2 gap-2 text-xs text-gray-300">
+                                                <div>
+                                                  <span className="text-gray-400">Activities: </span>
+                                                  {ci.recommended_owners[0].activity_count}
+                                                </div>
+                                                <div>
+                                                  <span className="text-gray-400">Last Seen: </span>
+                                                  {ci.recommended_owners[0].last_activity_days_ago === 999 ? 'Never' : `${ci.recommended_owners[0].last_activity_days_ago}d ago`}
+                                                </div>
+                                                <div>
+                                                  <span className="text-gray-400">Ownership Changes: </span>
+                                                  {ci.recommended_owners[0].ownership_changes}
+                                                </div>
+                                                <div>
+                                                  <span className="text-gray-400">Fields Modified: </span>
+                                                  {ci.recommended_owners[0].fields_modified}
+                                                </div>
+                                              </div>
+                                              
+                                              {ci.recommended_owners[0].department && (
+                                                <div className="mt-2 text-xs text-gray-400">
+                                                  Department: {ci.recommended_owners[0].department}
+                                                </div>
+                                              )}
+                                            </div>
+
+                                            {/* Show Alternate Recommendations Button */}
+                                            {ci.recommended_owners.length >= 1 && (
+                                              <div className="text-center">
+                                                <button
+                                                  onClick={() => toggleAlternateRecommendations(ci.ci_id)}
+                                                  className="flex items-center space-x-2 mx-auto px-4 py-2 bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white rounded-lg transition-all text-sm"
+                                                >
+                                                  <MoreHorizontal className="w-4 h-4" />
+                                                  <span>
+                                                    {expandedAlternates.has(ci.ci_id) ? 'Hide' : 'Show'} {ci.recommended_owners.length > 1 ? 'Alternate' : 'All'} Recommendations
+                                                  </span>
+                                                  <span className="bg-white/20 px-2 py-1 rounded text-xs">
+                                                    {ci.recommended_owners.length > 1 ? `+${ci.recommended_owners.length - 1}` : `2 total`}
+                                                  </span>
+                                                </button>
+                                              </div>
+                                            )}
+
+                                            {/* Alternate Recommendations */}
+                                            {expandedAlternates.has(ci.ci_id) && ci.recommended_owners.length >= 1 && (
+                                              <div className="space-y-2 border-t border-white/10 pt-3">
+                                                <div className="text-sm text-gray-400 font-medium mb-2">
+                                                  {ci.recommended_owners.length > 1 ? 'Alternate Options:' : 'All Recommendations:'}
+                                                </div>
+                                                {/* Show actual alternates for multiple recommendations */}
+                                                {ci.recommended_owners.length > 1 && ci.recommended_owners.slice(1).map((owner, ownerIdx) => (
+                                                  <div key={ownerIdx + 1} className="bg-white/3 p-3 rounded-lg border border-white/5">
+                                                    <div className="flex items-center justify-between mb-2">
+                                                      <div>
+                                                        <div className="text-blue-300 font-medium">{owner.display_name}</div>
+                                                        <div className="text-xs text-gray-400">{owner.username}</div>
+                                                      </div>
+                                                      <div className="text-right">
+                                                        <div className="text-blue-400 font-bold">{owner.score}/100</div>
+                                                        <div className="text-xs text-gray-400">#{ownerIdx + 2} Match</div>
+                                                      </div>
+                                                    </div>
+                                                    
+                                                    <div className="grid grid-cols-2 gap-2 text-xs text-gray-300">
+                                                      <div>
+                                                        <span className="text-gray-400">Activities: </span>
+                                                        {owner.activity_count}
+                                                      </div>
+                                                      <div>
+                                                        <span className="text-gray-400">Last Seen: </span>
+                                                        {owner.last_activity_days_ago === 999 ? 'Never' : `${owner.last_activity_days_ago}d ago`}
+                                                      </div>
+                                                      <div>
+                                                        <span className="text-gray-400">Ownership Changes: </span>
+                                                        {owner.ownership_changes}
+                                                      </div>
+                                                      <div>
+                                                        <span className="text-gray-400">Fields Modified: </span>
+                                                        {owner.fields_modified}
+                                                      </div>
+                                                    </div>
+                                                    
+                                                    {owner.department && (
+                                                      <div className="mt-2 text-xs text-gray-400">
+                                                        Department: {owner.department}
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                ))}
+
+                                                {/* Show current owner as alternate when only 1 recommendation */}
+                                                {ci.recommended_owners.length === 1 && (
+                                                  <div className="bg-white/3 p-3 rounded-lg border border-white/5">
+                                                    <div className="flex items-center justify-between mb-2">
+                                                      <div>
+                                                        <div className="text-orange-300 font-medium">{ci.current_owner} (Current)</div>
+                                                        <div className="text-xs text-gray-400">{ci.current_owner}</div>
+                                                      </div>
+                                                      <div className="text-right">
+                                                        <div className="text-orange-400 font-bold">0/100</div>
+                                                        <div className="text-xs text-gray-400">Current Owner</div>
+                                                      </div>
+                                                    </div>
+                                                    
+                                                    <div className="grid grid-cols-2 gap-2 text-xs text-gray-300">
+                                                      <div>
+                                                        <span className="text-gray-400">Activities: </span>
+                                                        {ci.owner_activity_count || 0}
+                                                      </div>
+                                                      <div>
+                                                        <span className="text-gray-400">Last Seen: </span>
+                                                        {ci.days_since_owner_activity === 999 ? 'Never' : `${ci.days_since_owner_activity || 0}d ago`}
+                                                      </div>
+                                                      <div>
+                                                        <span className="text-gray-400">Status: </span>
+                                                        <span className={ci.owner_active ? 'text-green-400' : 'text-red-400'}>
+                                                          {ci.owner_active ? 'Active' : 'Inactive'}
+                                                        </span>
+                                                      </div>
+                                                      <div>
+                                                        <span className="text-gray-400">Risk: </span>
+                                                        <span className="text-red-400">Stale Ownership</span>
+                                                      </div>
+                                                    </div>
+                                                    
+                                                    <div className="mt-2 text-xs text-orange-400">
+                                                      Note: Current owner marked as stale - consider reassignment
+                                                    </div>
                                                   </div>
                                                 )}
-                                              </div>
-                                            ))}
-                                            
-                                            {ci.recommended_owners.length > 3 && (
-                                              <div className="text-center">
-                                                <span className="text-gray-400 text-sm">
-                                                  +{ci.recommended_owners.length - 3} more recommendations available
-                                                </span>
                                               </div>
                                             )}
                                           </div>
@@ -763,11 +983,97 @@ const ServiceNowScanner = () => {
                             <p className="text-gray-400 text-sm">All CIs appear to have appropriate ownership assignments.</p>
                           </div>
                         )}
+
+                        {/* Pagination Controls */}
+                        {getFilteredCIs().length > itemsPerPage && (
+                          <div className="p-6 border-t border-white/10 bg-white/2">
+                            <div className="flex items-center justify-between">
+                              <div className="text-sm text-gray-400">
+                                Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, getFilteredCIs().length)} of {getFilteredCIs().length} {activeFilter === 'all' ? 'stale CIs' : `${activeFilter} risk CIs`}
+                                {activeFilter !== 'all' && scanResults && scanResults.stale_cis && (
+                                  <span className="ml-2">
+                                    (filtered from {scanResults.stale_cis.length} total)
+                                  </span>
+                                )}
+                              </div>
+                              
+                              <div className="flex items-center space-x-2">
+                                {/* Previous Button */}
+                                <button
+                                  onClick={goToPrevPage}
+                                  disabled={currentPage === 1}
+                                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                                    currentPage === 1 
+                                      ? 'bg-gray-800 text-gray-500 cursor-not-allowed' 
+                                      : 'bg-white/10 text-white hover:bg-white/20 hover:scale-105'
+                                  }`}
+                                >
+                                  <ChevronLeft className="w-4 h-4" />
+                                </button>
+
+                                {/* Page Numbers */}
+                                <div className="flex items-center space-x-1">
+                                  {getTotalPages() > 0 && Array.from({ length: Math.min(5, getTotalPages()) }, (_, i) => {
+                                    let pageNum;
+                                    if (getTotalPages() <= 5) {
+                                      pageNum = i + 1;
+                                    } else if (currentPage <= 3) {
+                                      pageNum = i + 1;
+                                    } else if (currentPage >= getTotalPages() - 2) {
+                                      pageNum = getTotalPages() - 4 + i;
+                                    } else {
+                                      pageNum = currentPage - 2 + i;
+                                    }
+
+                                    return (
+                                      <button
+                                        key={pageNum}
+                                        onClick={() => goToPage(pageNum)}
+                                        className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                                          currentPage === pageNum
+                                            ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg'
+                                            : 'bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white'
+                                        }`}
+                                      >
+                                        {pageNum}
+                                      </button>
+                                    );
+                                  })}
+                                  
+                                  {getTotalPages() > 5 && currentPage < getTotalPages() - 2 && (
+                                    <>
+                                      <span className="text-gray-400 px-2">...</span>
+                                      <button
+                                        onClick={() => goToPage(getTotalPages())}
+                                        className="px-3 py-2 rounded-lg text-sm font-medium bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white transition-all"
+                                      >
+                                        {getTotalPages()}
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+
+                                {/* Next Button */}
+                                <button
+                                  onClick={goToNextPage}
+                                  disabled={currentPage === getTotalPages()}
+                                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                                    currentPage === getTotalPages() 
+                                      ? 'bg-gray-800 text-gray-500 cursor-not-allowed' 
+                                      : 'bg-white/10 text-white hover:bg-white/20 hover:scale-105'
+                                  }`}
+                                >
+                                  <ChevronRight className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </CardContainer>
 
                     {/* Grouped by Recommended Owners */}
-                    {scanResults.grouped_by_owners && scanResults.grouped_by_owners.length > 0 && showGroupedView && (
+                    {scanResults && scanResults.grouped_by_owners && Array.isArray(scanResults.grouped_by_owners) && scanResults.grouped_by_owners.length > 0 && showGroupedView && (
                       <CardContainer>
                         <div className="overflow-hidden">
                           <div className="p-6 border-b border-white/10">

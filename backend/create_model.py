@@ -370,9 +370,8 @@ class RuleBasedStalenessDetector:
             if not user_activities:
                 return None
 
-            # Calculate scores
-            best_user = None
-            best_score = 0
+            # Calculate scores for all users
+            user_scores = []
 
             for user, data in user_activities.items():
                 score = 0
@@ -398,19 +397,20 @@ class RuleBasedStalenessDetector:
                         consistency = data['count'] / activity_span
                         score += min(consistency * 10, 10)
 
-                if score > best_score:
-                    best_score = score
-                    best_user = user
+                user_scores.append({
+                    'user': user,
+                    'score': score,
+                    'activity_count': data['count'],
+                    'last_activity_days_ago': (datetime.now() - data['last_activity']).days if data['last_activity'] else 999,
+                    'fields_modified': len(data['fields']),
+                    'ownership_changes': len(data['fields'].intersection(ownership_fields))
+                })
 
-            if best_user:
-                return {
-                    'user': best_user,
-                    'score': best_score,
-                    'activity_count': user_activities[best_user]['count'],
-                    'last_activity_days_ago': (datetime.now() - user_activities[best_user]['last_activity']).days if user_activities[best_user]['last_activity'] else 999
-                }
-
-            return None
+            # Sort by score descending and return top recommendations
+            user_scores.sort(key=lambda x: x['score'], reverse=True)
+            
+            # Return top 5 recommendations (or all if less than 5)
+            return user_scores[:5] if user_scores else None
 
         except Exception as e:
             return None
@@ -502,23 +502,41 @@ class RuleBasedStalenessDetector:
                 
         return stale_cis
 
-    def _format_owner_recommendations(self, recommendation):
+    def _format_owner_recommendations(self, recommendations):
         """Format owner recommendations to be JSON serializable"""
-        if not recommendation:
+        if not recommendations:
             return []
         
-        # For now, create a simple recommendation list
-        # In a real implementation, this would analyze multiple potential owners
-        return [{
-            'username': str(recommendation.get('user', '')),
-            'display_name': str(recommendation.get('user', '')),
-            'score': int(recommendation.get('score', 0)),
-            'activity_count': int(recommendation.get('activity_count', 0)),
-            'last_activity_days_ago': int(recommendation.get('last_activity_days_ago', 999)),
-            'ownership_changes': 0,
-            'fields_modified': int(recommendation.get('activity_count', 0)),
-            'department': 'Unknown'
-        }]
+        # Handle both single recommendation (old format) and multiple recommendations (new format)
+        if isinstance(recommendations, dict):
+            # Old format - single recommendation
+            return [{
+                'username': str(recommendations.get('user', '')),
+                'display_name': str(recommendations.get('user', '')),
+                'score': int(recommendations.get('score', 0)),
+                'activity_count': int(recommendations.get('activity_count', 0)),
+                'last_activity_days_ago': int(recommendations.get('last_activity_days_ago', 999)),
+                'ownership_changes': int(recommendations.get('ownership_changes', 0)),
+                'fields_modified': int(recommendations.get('fields_modified', 0)),
+                'department': 'Unknown'
+            }]
+        elif isinstance(recommendations, list):
+            # New format - multiple recommendations
+            formatted_recommendations = []
+            for rec in recommendations:
+                formatted_recommendations.append({
+                    'username': str(rec.get('user', '')),
+                    'display_name': str(rec.get('user', '')),
+                    'score': int(rec.get('score', 0)),
+                    'activity_count': int(rec.get('activity_count', 0)),
+                    'last_activity_days_ago': int(rec.get('last_activity_days_ago', 999)),
+                    'ownership_changes': int(rec.get('ownership_changes', 0)),
+                    'fields_modified': int(rec.get('fields_modified', 0)),
+                    'department': 'Unknown'
+                })
+            return formatted_recommendations
+        
+        return []
 
 
 # Create and save the model
