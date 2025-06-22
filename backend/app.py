@@ -220,7 +220,7 @@ def fetch_ci_data(instance_url, username, password, limit=10000):
             headers=headers,
             params={
                 'sysparm_limit': limit,
-                'sysparm_fields': 'sys_id,name,short_description,sys_class_name,sys_updated_on,assigned_to,assigned_to.user_name'
+                'sysparm_fields': 'sys_id,name,short_description,sys_class_name,sys_updated_on,assigned_to,assigned_to.user_name,assigned_to.name'
             },
             timeout=60
         )
@@ -318,19 +318,30 @@ def analyze_cis_with_model(ci_data, audit_data, user_data):
     
     # Create labels DataFrame from CI data
     labels_data = []
+    ci_owner_display_names = {}  # Map CI ID to owner display name for later use
+    
     for ci in ci_data:
         assigned_to = ci.get('assigned_to', None)
         assigned_owner = ''
+        assigned_owner_display_name = ''
+        
         if isinstance(assigned_to, dict):
-            # Try user_name, then value, then name
+            # Try user_name first (this is the username), then value, then name
             assigned_owner = assigned_to.get('user_name') or assigned_to.get('value') or assigned_to.get('name', '')
+            # Get display name from the assigned_to object
+            assigned_owner_display_name = assigned_to.get('name', assigned_owner)
         elif assigned_to:
             assigned_owner = str(assigned_to)
+            assigned_owner_display_name = assigned_owner  # Fallback to username
+            
         if assigned_owner:
             labels_data.append({
                 'ci_id': ci.get('sys_id'),
                 'assigned_owner': assigned_owner
             })
+            # Store display name mapping
+            ci_owner_display_names[ci.get('sys_id')] = assigned_owner_display_name
+            
     labels_df = pd.DataFrame(labels_data)
     
     logger.info(f"CIs with assigned owners: {len(labels_df)} out of {len(ci_data)}")
@@ -349,7 +360,7 @@ def analyze_cis_with_model(ci_data, audit_data, user_data):
     logger.info(f"Analyzing {len(labels_df)} CIs with assigned owners...")
     
     # Get stale CI list from model
-    stale_ci_list = model.get_stale_ci_list(labels_df, audit_df, user_df, ci_df)
+    stale_ci_list = model.get_stale_ci_list(labels_df, audit_df, user_df, ci_df, ci_owner_display_names)
     
     logger.info(f"Found {len(stale_ci_list)} stale CIs")
     
@@ -506,16 +517,84 @@ def group_cis_by_recommended_owners(stale_ci_list):
 @app.route('/reload-model', methods=['POST'])
 def reload_model():
     """Reload the ML model"""
-    if load_model():
-        return jsonify({
-            'success': True,
-            'message': 'Model reloaded successfully'
-        })
-    else:
-        return jsonify({
-            'success': False,
-            'error': 'Failed to reload model'
-        }), 500
+    try:
+        global model
+        with open('staleness_detector_model.pkl', 'rb') as f:
+            model = pickle.load(f)
+        return jsonify({'success': True, 'message': 'Model reloaded successfully'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/assign-ci-owner', methods=['POST'])
+def assign_ci_owner():
+    """Assign a CI to a new owner by updating the assigned_to field"""
+    try:
+        data = request.get_json()
+        instance_url = data.get('instance_url')
+        username = data.get('username')
+        password = data.get('password')
+        ci_id = data.get('ci_id')
+        new_owner_username = data.get('new_owner_username')
+        
+        if not all([instance_url, username, password, ci_id, new_owner_username]):
+            return jsonify({'error': 'Missing required parameters'}), 400
+        
+        # First, get the user's sys_id from the username
+        user_url = f"{instance_url}/api/now/table/sys_user"
+        user_response = requests.get(
+            user_url,
+            auth=(username, password),
+            headers={'Accept': 'application/json'},
+            params={'sysparm_query': f'user_name={new_owner_username}', 'sysparm_limit': 1},
+            timeout=30
+        )
+        
+        if user_response.status_code != 200:
+            return jsonify({'error': 'Failed to find user in ServiceNow'}), 500
+        
+        user_data = user_response.json().get('result', [])
+        if not user_data:
+            return jsonify({'error': f'User {new_owner_username} not found in ServiceNow'}), 404
+        
+        user_sys_id = user_data[0].get('sys_id')
+        user_display_name = user_data[0].get('name', new_owner_username)
+        
+        # Update the CI's assigned_to field with the user's name (not sys_id)
+        ci_url = f"{instance_url}/api/now/table/cmdb_ci/{ci_id}"
+        update_data = {
+            'assigned_to': user_display_name  # Use display name instead of sys_id
+        }
+        
+        update_response = requests.patch(
+            ci_url,
+            auth=(username, password),
+            headers={
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            json=update_data,
+            timeout=30
+        )
+        
+        if update_response.status_code == 200:
+            logger.info(f"Successfully assigned CI {ci_id} to user {user_display_name} (username: {new_owner_username})")
+            return jsonify({
+                'success': True,
+                'message': f'CI successfully assigned to {user_display_name}',
+                'new_owner': {
+                    'username': new_owner_username,
+                    'display_name': user_display_name,
+                    'sys_id': user_sys_id
+                }
+            })
+        else:
+            error_msg = f"Failed to update CI assignment: {update_response.status_code}"
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 500
+            
+    except Exception as e:
+        logger.error(f"Error in assign_ci_owner: {str(e)}", exc_info=True)
+        return jsonify({'error': f'Assignment failed: {str(e)}'}), 500
 
 if __name__ == '__main__':
     print("Starting CMDB Analyzer Backend with ML Model...")

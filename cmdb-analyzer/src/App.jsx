@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database, ChevronUp, ChevronLeft, MoreHorizontal } from 'lucide-react';
+import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database, ChevronUp, ChevronLeft, MoreHorizontal, UserPlus, CheckCircle2 } from 'lucide-react';
 
 // Aceternity UI Components
 
@@ -160,6 +160,8 @@ const ServiceNowScanner = () => {
   const [itemsPerPage] = useState(50);
   const [expandedAlternates, setExpandedAlternates] = useState(new Set());
   const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'critical', 'high', 'medium', 'low'
+  const [assigningCIs, setAssigningCIs] = useState(new Set()); // Track CIs being assigned
+  const [assignmentResults, setAssignmentResults] = useState({}); // Track assignment results
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -346,12 +348,98 @@ const ServiceNowScanner = () => {
     setExpandedAlternates(newExpanded);
   };
 
+  const assignCIToOwner = async (ciId, ownerUsername, ownerDisplayName) => {
+    if (!connectionStatus?.success) {
+      alert('Please establish a successful connection first');
+      return;
+    }
+
+    // Add CI to assigning set
+    const newAssigning = new Set(assigningCIs);
+    newAssigning.add(ciId);
+    setAssigningCIs(newAssigning);
+
+    try {
+      const response = await fetch('http://localhost:5000/assign-ci-owner', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          instance_url: formData.instanceUrl,
+          username: formData.username,
+          password: formData.password,
+          ci_id: ciId,
+          new_owner_username: ownerUsername
+        }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        // Update assignment results
+        setAssignmentResults(prev => ({
+          ...prev,
+          [ciId]: {
+            success: true,
+            message: result.message,
+            newOwner: result.new_owner,
+            timestamp: new Date().toLocaleTimeString()
+          }
+        }));
+
+        // Update the CI data in scanResults to reflect the new owner
+        if (scanResults && scanResults.stale_cis) {
+          const updatedStaleCs = scanResults.stale_cis.map(ci => {
+            if (ci.ci_id === ciId) {
+              return {
+                ...ci,
+                current_owner: ownerDisplayName
+              };
+            }
+            return ci;
+          });
+          
+          setScanResults(prev => ({
+            ...prev,
+            stale_cis: updatedStaleCs
+          }));
+        }
+      } else {
+        setAssignmentResults(prev => ({
+          ...prev,
+          [ciId]: {
+            success: false,
+            message: result.error || 'Assignment failed',
+            timestamp: new Date().toLocaleTimeString()
+          }
+        }));
+      }
+    } catch (error) {
+      setAssignmentResults(prev => ({
+        ...prev,
+        [ciId]: {
+          success: false,
+          message: 'Network error during assignment',
+          timestamp: new Date().toLocaleTimeString()
+        }
+      }));
+    } finally {
+      // Remove CI from assigning set
+      const newAssigning = new Set(assigningCIs);
+      newAssigning.delete(ciId);
+      setAssigningCIs(newAssigning);
+    }
+  };
+
   // Reset pagination when new results come in
   useEffect(() => {
     setCurrentPage(1);
     setExpandedCI(null);
     setExpandedAlternates(new Set());
     setActiveFilter('all');
+    setAssigningCIs(new Set());
+    setAssignmentResults({});
   }, [scanResults]);
 
   return (
@@ -852,6 +940,57 @@ const ServiceNowScanner = () => {
                                                   Department: {ci.recommended_owners[0].department}
                                                 </div>
                                               )}
+                                              
+                                              {/* Assign Button */}
+                                              <div className="mt-3 pt-3 border-t border-white/10">
+                                                {assignmentResults[ci.ci_id] ? (
+                                                  <div className={`text-center p-2 rounded-lg ${
+                                                    assignmentResults[ci.ci_id].success 
+                                                      ? 'bg-green-500/20 text-green-400' 
+                                                      : 'bg-red-500/20 text-red-400'
+                                                  }`}>
+                                                    <div className="flex items-center justify-center space-x-2">
+                                                      {assignmentResults[ci.ci_id].success ? (
+                                                        <CheckCircle2 className="w-4 h-4" />
+                                                      ) : (
+                                                        <AlertCircle className="w-4 h-4" />
+                                                      )}
+                                                      <span className="text-sm font-medium">
+                                                        {assignmentResults[ci.ci_id].message}
+                                                      </span>
+                                                    </div>
+                                                    <div className="text-xs mt-1 opacity-75">
+                                                      {assignmentResults[ci.ci_id].timestamp}
+                                                    </div>
+                                                  </div>
+                                                ) : (
+                                                  <button
+                                                    onClick={() => assignCIToOwner(
+                                                      ci.ci_id, 
+                                                      ci.recommended_owners[0].username, 
+                                                      ci.recommended_owners[0].display_name
+                                                    )}
+                                                    disabled={assigningCIs.has(ci.ci_id)}
+                                                    className={`w-full flex items-center justify-center space-x-2 py-2 px-4 rounded-lg font-medium transition-all ${
+                                                      assigningCIs.has(ci.ci_id)
+                                                        ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                                        : 'bg-green-600 hover:bg-green-700 text-white hover:scale-105'
+                                                    }`}
+                                                  >
+                                                    {assigningCIs.has(ci.ci_id) ? (
+                                                      <>
+                                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                                        <span>Assigning...</span>
+                                                      </>
+                                                    ) : (
+                                                      <>
+                                                        <UserPlus className="w-4 h-4" />
+                                                        <span>Assign to {ci.recommended_owners[0].display_name}</span>
+                                                      </>
+                                                    )}
+                                                  </button>
+                                                )}
+                                              </div>
                                             </div>
 
                                             {/* Show Alternate Recommendations Button */}
@@ -916,6 +1055,35 @@ const ServiceNowScanner = () => {
                                                         Department: {owner.department}
                                                       </div>
                                                     )}
+                                                    
+                                                    {/* Assign Button for Alternate */}
+                                                    <div className="mt-3 pt-3 border-t border-white/10">
+                                                      <button
+                                                        onClick={() => assignCIToOwner(
+                                                          ci.ci_id, 
+                                                          owner.username, 
+                                                          owner.display_name
+                                                        )}
+                                                        disabled={assigningCIs.has(ci.ci_id)}
+                                                        className={`w-full flex items-center justify-center space-x-2 py-2 px-3 rounded-lg font-medium transition-all text-sm ${
+                                                          assigningCIs.has(ci.ci_id)
+                                                            ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                                            : 'bg-blue-600 hover:bg-blue-700 text-white hover:scale-105'
+                                                        }`}
+                                                      >
+                                                        {assigningCIs.has(ci.ci_id) ? (
+                                                          <>
+                                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                                            <span>Assigning...</span>
+                                                          </>
+                                                        ) : (
+                                                          <>
+                                                            <UserPlus className="w-3 h-3" />
+                                                            <span>Assign</span>
+                                                          </>
+                                                        )}
+                                                      </button>
+                                                    </div>
                                                   </div>
                                                 ))}
 
@@ -925,7 +1093,7 @@ const ServiceNowScanner = () => {
                                                     <div className="flex items-center justify-between mb-2">
                                                       <div>
                                                         <div className="text-orange-300 font-medium">{ci.current_owner} (Current)</div>
-                                                        <div className="text-xs text-gray-400">{ci.current_owner}</div>
+                                                        <div className="text-xs text-gray-400">{ci.current_owner_username || ci.current_owner}</div>
                                                       </div>
                                                       <div className="text-right">
                                                         <div className="text-orange-400 font-bold">0/100</div>
