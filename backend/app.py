@@ -1,7 +1,10 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
+import pickle
+import pandas as pd
 from datetime import datetime
+from create_model import RuleBasedStalenessDetector
 import logging
 
 # Configure logging
@@ -11,20 +14,38 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
+# Load the ML model
+MODEL_PATH = 'staleness_detector_model.pkl'
+model = None
+
+def load_model():
+    """Load the pickle model"""
+    global model
+    try:
+        with open(MODEL_PATH, 'rb') as f:
+            model = pickle.load(f)
+        logger.info(f"Model loaded successfully from {MODEL_PATH}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to load model: {str(e)}")
+        return False
+
+# Load model on startup
+load_model()
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'service': 'CMDB Analyzer Backend'
+        'service': 'CMDB Analyzer Backend',
+        'model_loaded': model is not None
     })
 
 @app.route('/test-connection', methods=['POST'])
 def test_connection():
-    """
-    Test ServiceNow connection endpoint
-    """
+    """Test ServiceNow connection endpoint"""
     try:
         data = request.get_json()
         
@@ -43,7 +64,6 @@ def test_connection():
         # Test ServiceNow connection
         logger.info(f"Testing connection to {instance_url}")
         
-        # Simple connection test - get user info
         test_url = f"{instance_url}/api/now/table/sys_user"
         
         try:
@@ -112,92 +132,228 @@ def test_connection():
 @app.route('/scan-stale-ownership', methods=['POST'])
 def scan_stale_ownership():
     """
-    Scan sys_audit, cmdb_ci, and sys_user tables to get record counts and field names.
+    Scan and analyze CIs for stale ownership using ML model
     """
+    if model is None:
+        return jsonify({
+            'error': 'ML model not loaded. Please check server logs.'
+        }), 500
+
     try:
         data = request.get_json()
+        logger.info(f"scan_stale_ownership input: {data}")
         instance_url = data.get('instance_url')
         username = data.get('username')
         password = data.get('password')
 
-        tables = ['sys_audit', 'cmdb_ci', 'sys_user']
-        results = {}
+        # Fetch data from ServiceNow
+        logger.info("Fetching data from ServiceNow...")
+        
+        # Get CI data
+        ci_data = fetch_ci_data(instance_url, username, password)
+        logger.info(f"Fetched {len(ci_data)} CI records")
+        if not ci_data:
+            logger.error("No CI data fetched")
+            return jsonify({'error': 'Failed to fetch CI data'}), 500
+
+        # Get audit data
+        audit_data = fetch_audit_data(instance_url, username, password)
+        logger.info(f"Fetched {len(audit_data)} audit records")
+        if not audit_data:
+            logger.error("No audit data fetched")
+            return jsonify({'error': 'Failed to fetch audit data'}), 500
+
+        # Get user data
+        user_data = fetch_user_data(instance_url, username, password)
+        logger.info(f"Fetched {len(user_data)} user records")
+        if not user_data:
+            logger.error("No user data fetched")
+            return jsonify({'error': 'Failed to fetch user data'}), 500
+
+        logger.info(f"Fetched {len(ci_data)} CIs, {len(audit_data)} audit records, {len(user_data)} users")
+
+        # Process data and make predictions
+        try:
+            stale_ci_list = analyze_cis_with_model(ci_data, audit_data, user_data)
+        except Exception as model_exc:
+            logger.error(f"Error in analyze_cis_with_model: {str(model_exc)}", exc_info=True)
+            return jsonify({
+                "error": f"Model analysis failed: {str(model_exc)}"
+            }), 500
+
+        return jsonify({
+            'success': True,
+            'message': 'Analysis completed successfully',
+            'summary': {
+                'total_cis_analyzed': len(ci_data),
+                'stale_cis_found': len(stale_ci_list),
+                'high_confidence_predictions': sum(1 for ci in stale_ci_list if ci['confidence'] > 0.8),
+                'critical_risk': sum(1 for ci in stale_ci_list if ci['risk_level'] == 'Critical'),
+                'high_risk': sum(1 for ci in stale_ci_list if ci['risk_level'] == 'High')
+            },
+            'stale_cis': stale_ci_list
+        })
+
+    except Exception as e:
+        logger.error(f"Error in scan_stale_ownership: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": f"Scan failed: {str(e)}"
+        }), 500
+
+def fetch_ci_data(instance_url, username, password, limit=1000):
+    """Fetch CI data from ServiceNow"""
+    try:
+        url = f"{instance_url}/api/now/table/cmdb_ci"
         headers = {
             'Accept': 'application/json',
             'Content-Type': 'application/json'
         }
-
-        # Define fields to fetch for each table
-        table_fields = {
-            'sys_user': ['user_name', 'name', 'email', 'active', 'sys_created_on', 'department'],
-            'cmdb_ci': ['sys_id', 'name', 'short_description', 'sys_class_name', 'sys_updated_on', 'assigned_to'],
-            'sys_audit': ['sys_created_on', 'tablename', 'fieldname', 'documentkey', 'record_checkpoint', 'user', 'oldvalue', 'newvalue', 'sys_created_by']
-        }
-
-        for table in tables:
-            url = f"{instance_url}/api/now/table/{table}"
-            fields = table_fields[table]
-            # Get sample records with only specified fields
-            try:
-                response = requests.get(
-                    url,
-                    auth=(username, password),
-                    headers=headers,
-                    params={
-                        'sysparm_limit': 5,
-                        'sysparm_fields': ','.join(fields)
-                    },
-                    timeout=30
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    sample_records = data.get('result', [])
-                    field_names = fields
-                else:
-                    sample_records = []
-                    field_names = fields
-            except Exception as e:
-                logger.error(f"Error fetching sample records for {table}: {str(e)}")
-                sample_records = []
-                field_names = fields
-
-            # Get record count
-            try:
-                count_response = requests.get(
-                    url,
-                    auth=(username, password),
-                    headers=headers,
-                    params={'sysparm_count': 'true'},
-                    timeout=30
-                )
-                if count_response.status_code == 200:
-                    record_count = int(count_response.headers.get('X-Total-Count', 0))
-                else:
-                    record_count = 0
-            except Exception as e:
-                logger.error(f"Error fetching count for {table}: {str(e)}")
-                record_count = 0
-
-            results[table] = {
-                'record_count': record_count,
-                'field_names': field_names,
-                'sample_records': sample_records
-            }
-
-        return jsonify({
-            'tables': results,
-            'message': 'Scan completed successfully.'
-        }), 200
-
+        
+        response = requests.get(
+            url,
+            auth=(username, password),
+            headers=headers,
+            params={
+                'sysparm_limit': limit,
+                'sysparm_fields': 'sys_id,name,short_description,sys_class_name,sys_updated_on,assigned_to,assigned_to.user_name'
+            },
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            return response.json().get('result', [])
+        else:
+            logger.error(f"Failed to fetch CI data: {response.status_code}")
+            return []
+            
     except Exception as e:
-        logger.error(f"Error in scan_stale_ownership: {str(e)}")
+        logger.error(f"Error fetching CI data: {str(e)}")
+        return []
+
+def fetch_audit_data(instance_url, username, password, limit=5000):
+    """Fetch audit data from ServiceNow"""
+    try:
+        url = f"{instance_url}/api/now/table/sys_audit"
+        headers = {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+        
+        # Get recent audit records
+        response = requests.get(
+            url,
+            auth=(username, password),
+            headers=headers,
+            params={
+                'sysparm_limit': limit,
+                'sysparm_fields': 'sys_created_on,tablename,fieldname,documentkey,user,oldvalue,newvalue',
+            },
+            timeout=120
+        )
+        
+        if response.status_code == 200:
+            return response.json().get('result', [])
+        else:
+            logger.error(f"Failed to fetch audit data: {response.status_code}")
+            return []
+            
+    except Exception as e:
+        logger.error(f"Error fetching audit data: {str(e)}")
+        return []
+
+def fetch_user_data(instance_url, username, password, limit=1000):
+    """Fetch user data from ServiceNow"""
+    try:
+        url = f"{instance_url}/api/now/table/sys_user"
+        headers = {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.get(
+            url,
+            auth=(username, password),
+            headers=headers,
+            params={
+                'sysparm_limit': limit,
+                'sysparm_fields': 'user_name,name,email,active,sys_created_on,department'
+            },
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            return response.json().get('result', [])
+        else:
+            logger.error(f"Failed to fetch user data: {response.status_code}")
+            return []
+            
+    except Exception as e:
+        logger.error(f"Error fetching user data: {str(e)}")
+        return []
+
+def analyze_cis_with_model(ci_data, audit_data, user_data):
+    """Analyze CIs using the ML model and return stale CI list"""
+    
+    # Convert to pandas DataFrames
+    ci_df = pd.DataFrame(ci_data)
+    audit_df = pd.DataFrame(audit_data)
+    user_df = pd.DataFrame(user_data)
+    
+    # Log a sample CI for debugging
+    if len(ci_data) > 0:
+        logger.info(f"Sample CI: {ci_data[0]}")
+    
+    # Create labels DataFrame from CI data
+    labels_data = []
+    for ci in ci_data:
+        assigned_to = ci.get('assigned_to', None)
+        assigned_owner = ''
+        if isinstance(assigned_to, dict):
+            # Try user_name, then value, then name
+            assigned_owner = assigned_to.get('user_name') or assigned_to.get('value') or assigned_to.get('name', '')
+        elif assigned_to:
+            assigned_owner = str(assigned_to)
+        if assigned_owner:
+            labels_data.append({
+                'ci_id': ci.get('sys_id'),
+                'assigned_owner': assigned_owner
+            })
+    labels_df = pd.DataFrame(labels_data)
+    
+    if len(labels_df) == 0:
+        logger.warning("No CIs with assigned owners found")
+        return []
+    
+    # Convert dates in audit data
+    if len(audit_df) > 0:
+        audit_df['sys_created_on'] = pd.to_datetime(audit_df['sys_created_on'], errors='coerce')
+    
+    logger.info(f"Analyzing {len(labels_df)} CIs with assigned owners...")
+    
+    # Get stale CI list from model
+    stale_ci_list = model.get_stale_ci_list(labels_df, audit_df, user_df, ci_df)
+    
+    logger.info(f"Found {len(stale_ci_list)} stale CIs")
+    return stale_ci_list
+
+@app.route('/reload-model', methods=['POST'])
+def reload_model():
+    """Reload the ML model"""
+    if load_model():
         return jsonify({
-            "error": "Scan failed due to server error."
+            'success': True,
+            'message': 'Model reloaded successfully'
+        })
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'Failed to reload model'
         }), 500
 
 if __name__ == '__main__':
-    print("Starting CMDB Analyzer Backend...")
+    print("Starting CMDB Analyzer Backend with ML Model...")
     print("Backend will be available at: http://localhost:5000")
     print("Health check: http://localhost:5000/health")
     print("Test connection: POST /test-connection")
-    app.run(debug=True, host='0.0.0.0', port=5000) 
+    print("Scan for stale ownership: POST /scan-stale-ownership")
+    app.run(debug=True, host='0.0.0.0', port=5000)
