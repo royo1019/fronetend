@@ -89,16 +89,17 @@ const ServiceNowScanner = () => {
         });
       }, 500);
 
-      // Simulate API call to backend that:
-      // 1. Fetches sys_audit and cmdb_ci tables from ServiceNow
-      // 2. Processes data with your trained model (pkl file)
-      // 3. Returns stale ownership results
-      const response = await fetch('/api/servicenow/scan-stale-ownership', {
+      // Corrected API call to backend
+      const response = await fetch('http://localhost:5000/scan-stale-ownership', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          instance_url: formData.instanceUrl,
+          username: formData.username,
+          password: formData.password
+        }),
       });
 
       clearInterval(progressInterval);
@@ -282,21 +283,52 @@ const ServiceNowScanner = () => {
                         {scanResults.error}
                       </div>
                     ) : (
-                      <div className="space-y-3">
-                        <div className="grid grid-cols-2 gap-4 text-sm">
-                          <div className="bg-white/5 p-3 rounded">
-                            <div className="text-gray-400">Records Analyzed</div>
-                            <div className="text-white font-semibold text-lg">
-                              {scanResults?.recordsAnalyzed || '1,247'}
+                      <div className="space-y-6">
+                        {scanResults.tables && Object.entries(scanResults.tables).map(([table, info]) => (
+                          <div key={table} className="bg-white/10 p-4 rounded-lg border border-white/10">
+                            <div className="flex items-center mb-2">
+                              <span className="text-purple-300 font-semibold mr-2">{table}</span>
+                              <span className="text-gray-400 text-xs">({info.record_count} records)</span>
+                            </div>
+                            <div className="text-gray-300 text-xs mb-1">Fields:</div>
+                            <div className="flex flex-wrap gap-2 mb-2">
+                              {info.field_names && info.field_names.length > 0 ? (
+                                info.field_names.map((field) => (
+                                  <span key={field} className="bg-purple-900/40 text-purple-200 px-2 py-1 rounded text-xs border border-purple-700/30">{field}</span>
+                                ))
+                              ) : (
+                                <span className="text-gray-400">No fields found</span>
+                              )}
+                            </div>
+                            {/* Sample Records Table */}
+                            <div className="overflow-x-auto mt-2">
+                              {info.sample_records && info.sample_records.length > 0 ? (
+                                <table className="min-w-full text-xs text-left text-gray-200 border border-purple-900/30">
+                                  <thead>
+                                    <tr>
+                                      {info.field_names.map((field) => (
+                                        <th key={field} className="px-2 py-1 border-b border-purple-900/30 bg-purple-950/40">{field}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {info.sample_records.map((record, idx) => (
+                                      <tr key={idx} className="hover:bg-purple-900/20">
+                                        {info.field_names.map((field) => (
+                                          <td key={field} className="px-2 py-1 border-b border-purple-900/30">
+                                            {record[field] !== undefined && record[field] !== null ? String(record[field]) : <span className="text-gray-500">-</span>}
+                                          </td>
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              ) : (
+                                <div className="text-gray-400 italic">No sample records found.</div>
+                              )}
                             </div>
                           </div>
-                          <div className="bg-white/5 p-3 rounded">
-                            <div className="text-gray-400">Stale Ownerships Found</div>
-                            <div className="text-orange-400 font-semibold text-lg">
-                              {scanResults?.staleOwnerships || '23'}
-                            </div>
-                          </div>
-                        </div>
+                        ))}
                         <div className="text-green-400 text-sm">
                           ✓ Analysis complete. Detailed report available for download.
                         </div>

@@ -109,6 +109,92 @@ def test_connection():
             'error': 'Internal server error occurred'
         }), 500
 
+@app.route('/scan-stale-ownership', methods=['POST'])
+def scan_stale_ownership():
+    """
+    Scan sys_audit, cmdb_ci, and sys_user tables to get record counts and field names.
+    """
+    try:
+        data = request.get_json()
+        instance_url = data.get('instance_url')
+        username = data.get('username')
+        password = data.get('password')
+
+        tables = ['sys_audit', 'cmdb_ci', 'sys_user']
+        results = {}
+        headers = {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+
+        # Define fields to fetch for each table
+        table_fields = {
+            'sys_user': ['user_name', 'name', 'email', 'active', 'sys_created_on', 'department'],
+            'cmdb_ci': ['sys_id', 'name', 'short_description', 'sys_class_name', 'sys_updated_on', 'assigned_to'],
+            'sys_audit': ['sys_created_on', 'tablename', 'fieldname', 'documentkey', 'record_checkpoint', 'user', 'oldvalue', 'newvalue', 'sys_created_by']
+        }
+
+        for table in tables:
+            url = f"{instance_url}/api/now/table/{table}"
+            fields = table_fields[table]
+            # Get sample records with only specified fields
+            try:
+                response = requests.get(
+                    url,
+                    auth=(username, password),
+                    headers=headers,
+                    params={
+                        'sysparm_limit': 5,
+                        'sysparm_fields': ','.join(fields)
+                    },
+                    timeout=30
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    sample_records = data.get('result', [])
+                    field_names = fields
+                else:
+                    sample_records = []
+                    field_names = fields
+            except Exception as e:
+                logger.error(f"Error fetching sample records for {table}: {str(e)}")
+                sample_records = []
+                field_names = fields
+
+            # Get record count
+            try:
+                count_response = requests.get(
+                    url,
+                    auth=(username, password),
+                    headers=headers,
+                    params={'sysparm_count': 'true'},
+                    timeout=30
+                )
+                if count_response.status_code == 200:
+                    record_count = int(count_response.headers.get('X-Total-Count', 0))
+                else:
+                    record_count = 0
+            except Exception as e:
+                logger.error(f"Error fetching count for {table}: {str(e)}")
+                record_count = 0
+
+            results[table] = {
+                'record_count': record_count,
+                'field_names': field_names,
+                'sample_records': sample_records
+            }
+
+        return jsonify({
+            'tables': results,
+            'message': 'Scan completed successfully.'
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in scan_stale_ownership: {str(e)}")
+        return jsonify({
+            "error": "Scan failed due to server error."
+        }), 500
+
 if __name__ == '__main__':
     print("Starting CMDB Analyzer Backend...")
     print("Backend will be available at: http://localhost:5000")
