@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database } from 'lucide-react';
+import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database, ChevronUp } from 'lucide-react';
 
 // Aceternity UI Components
 
@@ -155,6 +155,7 @@ const ServiceNowScanner = () => {
   const [scanResults, setScanResults] = useState(null);
   const [scanProgress, setScanProgress] = useState(0);
   const [expandedCI, setExpandedCI] = useState(null);
+  const [showGroupedView, setShowGroupedView] = useState(false);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -538,9 +539,9 @@ const ServiceNowScanner = () => {
                           color: "text-orange-400"
                         },
                         {
-                          title: "Accuracy",
-                          value: "94%",
-                          icon: Brain,
+                          title: "Recommended Owners",
+                          value: scanResults.summary?.recommended_owners_count || 0,
+                          icon: Users,
                           color: "text-green-400"
                         }
                       ].map(({ title, value, icon: Icon, color }) => (
@@ -555,6 +556,23 @@ const ServiceNowScanner = () => {
                         </CardContainer>
                       ))}
                     </div>
+
+                    {/* Toggle Button for Grouped View */}
+                    {scanResults.grouped_by_owners && scanResults.grouped_by_owners.length > 0 && (
+                      <div className="flex justify-center mb-6">
+                        <button
+                          onClick={() => setShowGroupedView(!showGroupedView)}
+                          className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white font-medium rounded-lg transition-all duration-200 transform hover:scale-105 shadow-lg"
+                        >
+                          <Users className="w-5 h-5" />
+                          <span>{showGroupedView ? 'Hide' : 'Show'} Grouped by Owners</span>
+                          {showGroupedView ? 
+                            <ChevronUp className="w-4 h-4" /> : 
+                            <ChevronDown className="w-4 h-4" />
+                          }
+                        </button>
+                      </div>
+                    )}
 
                     {/* Stale CIs List */}
                     <CardContainer>
@@ -747,6 +765,91 @@ const ServiceNowScanner = () => {
                         )}
                       </div>
                     </CardContainer>
+
+                    {/* Grouped by Recommended Owners */}
+                    {scanResults.grouped_by_owners && scanResults.grouped_by_owners.length > 0 && showGroupedView && (
+                      <CardContainer>
+                        <div className="overflow-hidden">
+                          <div className="p-6 border-b border-white/10">
+                            <h3 className="text-2xl font-bold text-white flex items-center">
+                              <Users className="w-6 h-6 mr-3 text-blue-400" />
+                              Grouped by Recommended Owners
+                            </h3>
+                            <p className="text-gray-400 mt-2">CIs grouped by recommended assignees for bulk operations</p>
+                          </div>
+                          
+                          <div className="space-y-4 p-6">
+                            {scanResults.grouped_by_owners.map((group, idx) => (
+                              <div key={group.username} className="bg-white/5 rounded-lg border border-white/10 overflow-hidden">
+                                {/* Owner Header */}
+                                <div className="p-4 bg-white/5 border-b border-white/10">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center space-x-4">
+                                      <div className="w-12 h-12 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 flex items-center justify-center">
+                                        <UserCheck className="w-6 h-6 text-white" />
+                                      </div>
+                                      <div>
+                                        <h4 className="text-white font-semibold text-lg">{group.recommended_owner.display_name}</h4>
+                                        <div className="text-gray-400 text-sm">
+                                          {group.recommended_owner.username} • {group.recommended_owner.department}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    
+                                    {/* Statistics */}
+                                    <div className="text-right">
+                                      <div className="text-2xl font-bold text-blue-400">{group.total_cis}</div>
+                                      <div className="text-gray-400 text-sm">CIs to assign</div>
+                                    </div>
+                                  </div>
+                                  
+                                  {/* Statistics */}
+                                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="text-center">
+                                      <div className="text-lg font-semibold text-green-400">{group.recommended_owner.avg_score}</div>
+                                      <div className="text-xs text-gray-400">Avg Score</div>
+                                    </div>
+                                    <div className="text-center">
+                                      <div className="text-lg font-semibold text-purple-400">{(group.avg_confidence * 100).toFixed(0)}%</div>
+                                      <div className="text-xs text-gray-400">Avg Confidence</div>
+                                    </div>
+                                    <div className="text-center">
+                                      <div className="text-lg font-semibold text-red-400">{group.risk_breakdown.Critical + group.risk_breakdown.High}</div>
+                                      <div className="text-xs text-gray-400">High Risk</div>
+                                    </div>
+                                    <div className="text-center">
+                                      <div className="text-lg font-semibold text-orange-400">{group.recommended_owner.total_activity_count}</div>
+                                      <div className="text-xs text-gray-400">Total Activities</div>
+                                    </div>
+                                  </div>
+                                </div>
+                                
+                                {/* CIs List */}
+                                <div className="p-4">
+                                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    {group.cis_to_assign.map((ci, ciIdx) => (
+                                      <div key={ci.ci_id} className="bg-white/5 p-3 rounded-lg border border-white/10">
+                                        <div className="flex items-center justify-between mb-2">
+                                          <div className="font-medium text-white text-sm truncate">{ci.ci_name}</div>
+                                          <span className={`px-2 py-1 text-xs rounded ${getRiskColor(ci.risk_level)}`}>
+                                            {ci.risk_level}
+                                          </span>
+                                        </div>
+                                        <div className="text-xs text-gray-400 mb-2">{ci.ci_class}</div>
+                                        <div className="flex justify-between text-xs">
+                                          <span className="text-gray-400">Current: {ci.current_owner}</span>
+                                          <span className="text-green-400">{(ci.confidence * 100).toFixed(0)}%</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </CardContainer>
+                    )}
                   </>
                 )}
               </div>

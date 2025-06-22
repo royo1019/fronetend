@@ -181,6 +181,9 @@ def scan_stale_ownership():
                 "error": f"Model analysis failed: {str(model_exc)}"
             }), 500
 
+        # Group stale CIs by recommended owners
+        grouped_by_owners = group_cis_by_recommended_owners(stale_ci_list)
+
         return jsonify({
             'success': True,
             'message': 'Analysis completed successfully',
@@ -189,9 +192,11 @@ def scan_stale_ownership():
                 'stale_cis_found': len(stale_ci_list),
                 'high_confidence_predictions': sum(1 for ci in stale_ci_list if ci['confidence'] > 0.8),
                 'critical_risk': sum(1 for ci in stale_ci_list if ci['risk_level'] == 'Critical'),
-                'high_risk': sum(1 for ci in stale_ci_list if ci['risk_level'] == 'High')
+                'high_risk': sum(1 for ci in stale_ci_list if ci['risk_level'] == 'High'),
+                'recommended_owners_count': len(grouped_by_owners)
             },
-            'stale_cis': stale_ci_list
+            'stale_cis': stale_ci_list,
+            'grouped_by_owners': grouped_by_owners
         })
 
     except Exception as e:
@@ -376,6 +381,127 @@ def analyze_cis_with_model(ci_data, audit_data, user_data):
         logger.info(f"Test prediction for first CI: {test_result}")
     
     return stale_ci_list
+
+def group_cis_by_recommended_owners(stale_ci_list):
+    """
+    Group stale CIs by their recommended owners for bulk assignment analysis
+    """
+    grouped = {}
+    
+    for ci in stale_ci_list:
+        recommended_owners = ci.get('recommended_owners', [])
+        
+        # If CI has recommended owners, group by the top recommendation
+        if recommended_owners and len(recommended_owners) > 0:
+            top_recommendation = recommended_owners[0]  # Get the best recommendation
+            username = top_recommendation.get('username', 'Unknown')
+            
+            if username not in grouped:
+                grouped[username] = {
+                    'recommended_owner': {
+                        'username': username,
+                        'display_name': top_recommendation.get('display_name', username),
+                        'department': top_recommendation.get('department', 'Unknown'),
+                        'avg_score': 0,
+                        'total_activity_count': 0
+                    },
+                    'cis_to_assign': [],
+                    'total_cis': 0,
+                    'risk_breakdown': {
+                        'Critical': 0,
+                        'High': 0,
+                        'Medium': 0,
+                        'Low': 0
+                    },
+                    'avg_confidence': 0
+                }
+            
+            # Add CI to this owner's group
+            grouped[username]['cis_to_assign'].append({
+                'ci_id': ci.get('ci_id'),
+                'ci_name': ci.get('ci_name'),
+                'ci_class': ci.get('ci_class'),
+                'current_owner': ci.get('current_owner'),
+                'confidence': ci.get('confidence'),
+                'risk_level': ci.get('risk_level'),
+                'staleness_reasons': ci.get('staleness_reasons', [])
+            })
+            
+            # Update aggregated statistics
+            grouped[username]['total_cis'] += 1
+            grouped[username]['risk_breakdown'][ci.get('risk_level', 'Low')] += 1
+            
+            # Update averages
+            current_total = grouped[username]['total_cis']
+            current_avg_confidence = grouped[username]['avg_confidence']
+            grouped[username]['avg_confidence'] = (
+                (current_avg_confidence * (current_total - 1) + ci.get('confidence', 0)) / current_total
+            )
+            
+            # Update owner stats
+            current_avg_score = grouped[username]['recommended_owner']['avg_score']
+            grouped[username]['recommended_owner']['avg_score'] = (
+                (current_avg_score * (current_total - 1) + top_recommendation.get('score', 0)) / current_total
+            )
+            grouped[username]['recommended_owner']['total_activity_count'] += top_recommendation.get('activity_count', 0)
+        
+        else:
+            # Handle CIs with no recommendations
+            if 'No Recommendation' not in grouped:
+                grouped['No Recommendation'] = {
+                    'recommended_owner': {
+                        'username': 'No Recommendation',
+                        'display_name': 'No Suitable Owner Found',
+                        'department': 'Manual Review Required',
+                        'avg_score': 0,
+                        'total_activity_count': 0
+                    },
+                    'cis_to_assign': [],
+                    'total_cis': 0,
+                    'risk_breakdown': {
+                        'Critical': 0,
+                        'High': 0,
+                        'Medium': 0,
+                        'Low': 0
+                    },
+                    'avg_confidence': 0
+                }
+            
+            grouped['No Recommendation']['cis_to_assign'].append({
+                'ci_id': ci.get('ci_id'),
+                'ci_name': ci.get('ci_name'),
+                'ci_class': ci.get('ci_class'),
+                'current_owner': ci.get('current_owner'),
+                'confidence': ci.get('confidence'),
+                'risk_level': ci.get('risk_level'),
+                'staleness_reasons': ci.get('staleness_reasons', [])
+            })
+            
+            grouped['No Recommendation']['total_cis'] += 1
+            grouped['No Recommendation']['risk_breakdown'][ci.get('risk_level', 'Low')] += 1
+            
+            current_total = grouped['No Recommendation']['total_cis']
+            current_avg_confidence = grouped['No Recommendation']['avg_confidence']
+            grouped['No Recommendation']['avg_confidence'] = (
+                (current_avg_confidence * (current_total - 1) + ci.get('confidence', 0)) / current_total
+            )
+    
+    # Convert to list and sort by total CIs (most CIs first)
+    grouped_list = []
+    for username, data in grouped.items():
+        # Round averages for cleaner display
+        data['avg_confidence'] = round(data['avg_confidence'], 2)
+        data['recommended_owner']['avg_score'] = round(data['recommended_owner']['avg_score'], 1)
+        
+        grouped_list.append({
+            'username': username,
+            **data
+        })
+    
+    # Sort by total CIs descending (owners with most CIs first)
+    grouped_list.sort(key=lambda x: x['total_cis'], reverse=True)
+    
+    return grouped_list
 
 @app.route('/reload-model', methods=['POST'])
 def reload_model():
