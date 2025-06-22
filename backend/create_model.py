@@ -20,7 +20,7 @@ class RuleBasedStalenessDetector:
                 'description': 'Owner has 0 activities while others are active',
                 'conditions': [
                     'owner_activity_count == 0',
-                    'total_activity_count >= 5',
+                    'total_activity_count >= 2',
                     'other_users_count > 0'
                 ],
                 'confidence': 0.95,
@@ -51,10 +51,10 @@ class RuleBasedStalenessDetector:
                 'scenarios': ['7', '10', '15']
             },
             'extended_inactivity': {
-                'description': 'No owner activity for 60+ days',
+                'description': 'No owner activity for 30+ days',
                 'conditions': [
-                    'days_since_owner_activity > 60',
-                    'recent_other_activities > 0'
+                    'days_since_owner_activity > 30',
+                    'recent_other_activities >= 0'
                 ],
                 'confidence': 0.85,
                 'scenarios': ['1', '9']
@@ -72,7 +72,7 @@ class RuleBasedStalenessDetector:
                 'description': 'User moved to different department',
                 'conditions': [
                     'owner_dept_changed == True',
-                    'days_since_owner_activity > 30'
+                    'days_since_owner_activity > 15'
                 ],
                 'confidence': 0.8,
                 'scenarios': ['3', '6']
@@ -88,8 +88,8 @@ class RuleBasedStalenessDetector:
             'dominant_other_user': {
                 'description': 'Another user has majority of recent activities',
                 'conditions': [
-                    'top_other_user_ratio > 0.6',
-                    'owner_activity_ratio < 0.2'
+                    'top_other_user_ratio > 0.5',
+                    'owner_activity_ratio < 0.3'
                 ],
                 'confidence': 0.85,
                 'scenarios': ['2', '7', '12']
@@ -101,6 +101,15 @@ class RuleBasedStalenessDetector:
                 ],
                 'confidence': 0.9,
                 'scenarios': ['multiple']
+            },
+            'minimal_owner_activity': {
+                'description': 'Owner has very little recent activity',
+                'conditions': [
+                    'owner_activity_count <= 1',
+                    'total_activity_count > 0'
+                ],
+                'confidence': 0.7,
+                'scenarios': ['general']
             }
         }
 
@@ -423,22 +432,37 @@ class RuleBasedStalenessDetector:
         for _, row in audit_df.iterrows():
             doc_key = row.get('documentkey')
             if doc_key:
-                audit_by_ci.setdefault(doc_key, []).append(row.to_dict())
-        user_by_name = {str(u.get('user_name')): u for _, u in user_df.iterrows() if u.get('user_name')}
-        ci_by_id = {str(ci.get('sys_id')): ci for _, ci in ci_df.iterrows() if ci.get('sys_id')}
+                # Convert pandas Series to dict to avoid JSON serialization issues
+                audit_by_ci.setdefault(doc_key, []).append({k: v for k, v in row.to_dict().items()})
+        
+        # Convert user and CI data to regular dicts
+        user_by_name = {}
+        for _, u in user_df.iterrows():
+            if u.get('user_name'):
+                user_by_name[str(u.get('user_name'))] = {k: v for k, v in u.to_dict().items()}
+        
+        ci_by_id = {}
+        for _, ci in ci_df.iterrows():
+            if ci.get('sys_id'):
+                ci_by_id[str(ci.get('sys_id'))] = {k: v for k, v in ci.to_dict().items()}
 
         for _, label in labels_df.iterrows():
-            ci_id = label.get('ci_id')
-            assigned_owner = label.get('assigned_owner')
+            # Convert label to dict to avoid pandas Series issues
+            label_dict = label.to_dict()
+            ci_id = label_dict.get('ci_id')
+            assigned_owner = label_dict.get('assigned_owner')
+            
             ci_info = ci_by_id.get(str(ci_id), {})
             audit_records = audit_by_ci.get(str(ci_id), [])
             user_info = user_by_name.get(str(assigned_owner), {})
+            
             ci_data = {
                 'ci_info': ci_info,
                 'audit_records': audit_records,
                 'user_info': user_info,
                 'assigned_owner': assigned_owner
             }
+            
             result = self.predict_single(ci_data)
             if result.get('is_stale'):
                 # Assign risk level based on confidence
@@ -451,17 +475,50 @@ class RuleBasedStalenessDetector:
                     risk_level = 'Medium'
                 else:
                     risk_level = 'Low'
-                stale_cis.append({
-                    'ci_id': ci_id,
-                    'assigned_owner': assigned_owner,
-                    'confidence': confidence,
-                    'risk_level': risk_level,
-                    'triggered_rules': result.get('triggered_rules', []),
-                    'new_owner_recommendation': result.get('new_owner_recommendation'),
-                    'features': result.get('features'),
-                    'ci_info': ci_info
-                })
+                
+                # Ensure all data is JSON serializable
+                stale_ci_dict = {
+                    'ci_id': str(ci_id),
+                    'ci_name': str(ci_info.get('name', 'Unknown')),
+                    'ci_class': str(ci_info.get('sys_class_name', 'Unknown')),
+                    'ci_description': str(ci_info.get('short_description', '')),
+                    'current_owner': str(assigned_owner),
+                    'confidence': float(confidence),
+                    'risk_level': str(risk_level),
+                    'staleness_reasons': [
+                        {
+                            'rule_name': str(rule.get('rule', '')),
+                            'description': str(rule.get('description', '')),
+                            'confidence': float(rule.get('confidence', 0))
+                        } for rule in result.get('triggered_rules', [])
+                    ],
+                    'recommended_owners': self._format_owner_recommendations(result.get('new_owner_recommendation')),
+                    'owner_activity_count': int(result.get('features', {}).get('owner_activity_count', 0)),
+                    'days_since_owner_activity': int(result.get('features', {}).get('days_since_owner_activity', 999)),
+                    'owner_active': bool(result.get('features', {}).get('owner_active', True))
+                }
+                
+                stale_cis.append(stale_ci_dict)
+                
         return stale_cis
+
+    def _format_owner_recommendations(self, recommendation):
+        """Format owner recommendations to be JSON serializable"""
+        if not recommendation:
+            return []
+        
+        # For now, create a simple recommendation list
+        # In a real implementation, this would analyze multiple potential owners
+        return [{
+            'username': str(recommendation.get('user', '')),
+            'display_name': str(recommendation.get('user', '')),
+            'score': int(recommendation.get('score', 0)),
+            'activity_count': int(recommendation.get('activity_count', 0)),
+            'last_activity_days_ago': int(recommendation.get('last_activity_days_ago', 999)),
+            'ownership_changes': 0,
+            'fields_modified': int(recommendation.get('activity_count', 0)),
+            'department': 'Unknown'
+        }]
 
 
 # Create and save the model

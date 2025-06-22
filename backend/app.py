@@ -150,21 +150,21 @@ def scan_stale_ownership():
         logger.info("Fetching data from ServiceNow...")
         
         # Get CI data
-        ci_data = fetch_ci_data(instance_url, username, password)
+        ci_data = fetch_ci_data(instance_url, username, password, limit=100000000)
         logger.info(f"Fetched {len(ci_data)} CI records")
         if not ci_data:
             logger.error("No CI data fetched")
             return jsonify({'error': 'Failed to fetch CI data'}), 500
 
         # Get audit data
-        audit_data = fetch_audit_data(instance_url, username, password)
+        audit_data = fetch_audit_data(instance_url, username, password, limit=200000000)
         logger.info(f"Fetched {len(audit_data)} audit records")
         if not audit_data:
             logger.error("No audit data fetched")
             return jsonify({'error': 'Failed to fetch audit data'}), 500
 
         # Get user data
-        user_data = fetch_user_data(instance_url, username, password)
+        user_data = fetch_user_data(instance_url, username, password, limit=500000)
         logger.info(f"Fetched {len(user_data)} user records")
         if not user_data:
             logger.error("No user data fetched")
@@ -200,7 +200,7 @@ def scan_stale_ownership():
             "error": f"Scan failed: {str(e)}"
         }), 500
 
-def fetch_ci_data(instance_url, username, password, limit=1000):
+def fetch_ci_data(instance_url, username, password, limit=10000):
     """Fetch CI data from ServiceNow"""
     try:
         url = f"{instance_url}/api/now/table/cmdb_ci"
@@ -230,7 +230,7 @@ def fetch_ci_data(instance_url, username, password, limit=1000):
         logger.error(f"Error fetching CI data: {str(e)}")
         return []
 
-def fetch_audit_data(instance_url, username, password, limit=5000):
+def fetch_audit_data(instance_url, username, password, limit=20000):
     """Fetch audit data from ServiceNow"""
     try:
         url = f"{instance_url}/api/now/table/sys_audit"
@@ -261,7 +261,7 @@ def fetch_audit_data(instance_url, username, password, limit=5000):
         logger.error(f"Error fetching audit data: {str(e)}")
         return []
 
-def fetch_user_data(instance_url, username, password, limit=1000):
+def fetch_user_data(instance_url, username, password, limit=5000):
     """Fetch user data from ServiceNow"""
     try:
         url = f"{instance_url}/api/now/table/sys_user"
@@ -303,6 +303,14 @@ def analyze_cis_with_model(ci_data, audit_data, user_data):
     if len(ci_data) > 0:
         logger.info(f"Sample CI: {ci_data[0]}")
     
+    # Log sample audit data
+    if len(audit_data) > 0:
+        logger.info(f"Sample audit record: {audit_data[0]}")
+        
+    # Log sample user data
+    if len(user_data) > 0:
+        logger.info(f"Sample user: {user_data[0]}")
+    
     # Create labels DataFrame from CI data
     labels_data = []
     for ci in ci_data:
@@ -320,6 +328,10 @@ def analyze_cis_with_model(ci_data, audit_data, user_data):
             })
     labels_df = pd.DataFrame(labels_data)
     
+    logger.info(f"CIs with assigned owners: {len(labels_df)} out of {len(ci_data)}")
+    if len(labels_df) > 0:
+        logger.info(f"Sample assigned owner: {labels_df.iloc[0].to_dict()}")
+    
     if len(labels_df) == 0:
         logger.warning("No CIs with assigned owners found")
         return []
@@ -327,6 +339,7 @@ def analyze_cis_with_model(ci_data, audit_data, user_data):
     # Convert dates in audit data
     if len(audit_df) > 0:
         audit_df['sys_created_on'] = pd.to_datetime(audit_df['sys_created_on'], errors='coerce')
+        logger.info(f"Audit records date range: {audit_df['sys_created_on'].min()} to {audit_df['sys_created_on'].max()}")
     
     logger.info(f"Analyzing {len(labels_df)} CIs with assigned owners...")
     
@@ -334,6 +347,34 @@ def analyze_cis_with_model(ci_data, audit_data, user_data):
     stale_ci_list = model.get_stale_ci_list(labels_df, audit_df, user_df, ci_df)
     
     logger.info(f"Found {len(stale_ci_list)} stale CIs")
+    
+    # If no stale CIs found, let's debug the first few CIs
+    if len(stale_ci_list) == 0 and len(labels_df) > 0:
+        logger.info("No stale CIs found. Debugging first CI...")
+        first_ci = labels_df.iloc[0]
+        ci_id = first_ci['ci_id']
+        assigned_owner = first_ci['assigned_owner']
+        
+        # Get audit records for this CI
+        ci_audit_records = audit_df[audit_df['documentkey'] == ci_id] if 'documentkey' in audit_df.columns else pd.DataFrame()
+        logger.info(f"First CI {ci_id} has {len(ci_audit_records)} audit records")
+        
+        # Get user info
+        user_info = user_df[user_df['user_name'] == assigned_owner].iloc[0].to_dict() if len(user_df[user_df['user_name'] == assigned_owner]) > 0 else {}
+        logger.info(f"User info for {assigned_owner}: {user_info}")
+        
+        # Test model prediction manually
+        ci_info = ci_df[ci_df['sys_id'] == ci_id].iloc[0].to_dict() if len(ci_df[ci_df['sys_id'] == ci_id]) > 0 else {}
+        test_ci_data = {
+            'ci_info': ci_info,
+            'audit_records': ci_audit_records.to_dict('records'),
+            'user_info': user_info,
+            'assigned_owner': assigned_owner
+        }
+        
+        test_result = model.predict_single(test_ci_data)
+        logger.info(f"Test prediction for first CI: {test_result}")
+    
     return stale_ci_list
 
 @app.route('/reload-model', methods=['POST'])
