@@ -15,11 +15,11 @@ def test_model_loading():
     print("=" * 50)
     
     # Check if pickle file exists
-    model_path = 'staleness_detector_model.pkl'
+    model_path = 'enhanced_staleness_model.pkl'
     
     if not os.path.exists(model_path):
         print(f"❌ ERROR: {model_path} not found!")
-        print("Please run: python create_model.py")
+        print(f"Please run: python enhanced_staleness_model.py to generate the model.")
         return False
     
     print(f"✅ Found pickle file: {model_path}")
@@ -32,7 +32,7 @@ def test_model_loading():
         print("✅ Model loaded successfully!")
         
         # Check if it has the required methods
-        required_methods = ['predict_single', 'get_stale_ci_list', '_extract_features_from_servicenow_data']
+        required_methods = ['predict_single', 'get_stale_ci_list']
         
         for method in required_methods:
             if hasattr(model, method):
@@ -84,7 +84,7 @@ def test_flask_integration():
         print("✅ All Flask dependencies available")
         
         # Test the model loading like Flask does
-        MODEL_PATH = 'staleness_detector_model.pkl'
+        MODEL_PATH = 'enhanced_staleness_model.pkl'
         
         with open(MODEL_PATH, 'rb') as f:
             model = pickle.load(f)
@@ -136,6 +136,6 @@ if __name__ == "__main__":
         if not flask_ok:
             print("- Flask integration failed")
         print("\nTroubleshooting:")
-        print("1. Recreate the model: python create_model.py")
+        print("1. Recreate the model: python enhanced_staleness_model.py")
         print("2. Install dependencies: pip install flask pandas numpy scikit-learn")
         print("3. Check file permissions")

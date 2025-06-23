@@ -4,7 +4,7 @@ import requests
 import pickle
 import pandas as pd
 from datetime import datetime
-from create_model import RuleBasedStalenessDetector
+from enhanced_staleness_model import ScenarioBasedStalenessDetector
 import logging
 
 # Configure logging
@@ -15,7 +15,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Load the ML model
-MODEL_PATH = 'staleness_detector_model.pkl'
+MODEL_PATH = 'enhanced_staleness_model.pkl'
 model = None
 
 def load_model():
