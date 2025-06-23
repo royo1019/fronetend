@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database, ChevronUp, ChevronLeft, MoreHorizontal, UserPlus, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database, ChevronUp, ChevronLeft, MoreHorizontal, UserPlus, CheckCircle2, X, ArrowUp, ArrowDown } from 'lucide-react';
 
 // Aceternity UI Components
 
@@ -162,6 +162,13 @@ const ServiceNowScanner = () => {
   const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'critical', 'high', 'medium', 'low'
   const [assigningCIs, setAssigningCIs] = useState(new Set()); // Track CIs being assigned
   const [assignmentResults, setAssignmentResults] = useState({}); // Track assignment results
+  
+  // New functionality state
+  const [searchTerm, setSearchTerm] = useState(''); // Search functionality
+  const [assignedCIs, setAssignedCIs] = useState([]); // Track successfully assigned CIs
+  const [sortBy, setSortBy] = useState('confidence'); // 'confidence', 'risk', 'name', 'date'
+  const [sortOrder, setSortOrder] = useState('desc'); // 'asc', 'desc'
+  const [showAssignedSection, setShowAssignedSection] = useState(false); // Toggle assigned CIs section
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -298,14 +305,64 @@ const ServiceNowScanner = () => {
   const getFilteredCIs = () => {
     if (!scanResults || !scanResults.stale_cis || !Array.isArray(scanResults.stale_cis)) return [];
     
-    if (activeFilter === 'all') {
-      return scanResults.stale_cis;
+    let filteredCIs = scanResults.stale_cis;
+    
+    // Apply risk level filter
+    if (activeFilter !== 'all') {
+      filteredCIs = filteredCIs.filter(ci => {
+        const riskLevel = ci.risk_level ? ci.risk_level.toLowerCase() : '';
+        return riskLevel === activeFilter;
+      });
     }
     
-    return scanResults.stale_cis.filter(ci => {
-      const riskLevel = ci.risk_level ? ci.risk_level.toLowerCase() : '';
-      return riskLevel === activeFilter;
+    // Apply search filter
+    if (searchTerm) {
+      filteredCIs = filteredCIs.filter(ci => {
+        const searchLower = searchTerm.toLowerCase();
+        return (
+          ci.ci_name?.toLowerCase().includes(searchLower) ||
+          ci.ci_class?.toLowerCase().includes(searchLower) ||
+          ci.current_owner?.toLowerCase().includes(searchLower) ||
+          ci.ci_description?.toLowerCase().includes(searchLower)
+        );
+      });
+    }
+    
+    // Apply sorting
+    filteredCIs.sort((a, b) => {
+      let aValue, bValue;
+      
+      switch (sortBy) {
+        case 'confidence':
+          aValue = a.confidence || 0;
+          bValue = b.confidence || 0;
+          break;
+        case 'risk':
+          const riskOrder = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 };
+          aValue = riskOrder[a.risk_level] || 0;
+          bValue = riskOrder[b.risk_level] || 0;
+          break;
+        case 'name':
+          aValue = a.ci_name?.toLowerCase() || '';
+          bValue = b.ci_name?.toLowerCase() || '';
+          break;
+        case 'date':
+          aValue = a.days_since_owner_activity || 999;
+          bValue = b.days_since_owner_activity || 999;
+          break;
+        default:
+          aValue = a.confidence || 0;
+          bValue = b.confidence || 0;
+      }
+      
+      if (sortOrder === 'asc') {
+        return aValue > bValue ? 1 : aValue < bValue ? -1 : 0;
+      } else {
+        return aValue < bValue ? 1 : aValue > bValue ? -1 : 0;
+      }
     });
+    
+    return filteredCIs;
   };
 
   const getTotalPages = () => {
@@ -388,6 +445,18 @@ const ServiceNowScanner = () => {
           }
         }));
 
+        // Add to assigned CIs list
+        const assignedCI = scanResults.stale_cis.find(ci => ci.ci_id === ciId);
+        if (assignedCI) {
+          setAssignedCIs(prev => [...prev, {
+            ...assignedCI,
+            assigned_to: ownerDisplayName,
+            assigned_username: ownerUsername,
+            assignment_timestamp: new Date().toISOString(),
+            assignment_message: result.message
+          }]);
+        }
+
         // Update the CI data in scanResults to reflect the new owner
         if (scanResults && scanResults.stale_cis) {
           const updatedStaleCs = scanResults.stale_cis.map(ci => {
@@ -440,6 +509,8 @@ const ServiceNowScanner = () => {
     setActiveFilter('all');
     setAssigningCIs(new Set());
     setAssignmentResults({});
+    setSearchTerm(''); // Reset search
+    // Don't reset assignedCIs as they should persist across scans
   }, [scanResults]);
 
   return (
@@ -793,6 +864,85 @@ const ServiceNowScanner = () => {
                             )}
                           </div>
                         </div>
+
+                        {/* Search and Sort Controls */}
+                        {scanResults && scanResults.stale_cis && scanResults.stale_cis.length > 0 && (
+                          <div className="p-6 border-b border-white/10 bg-white/2">
+                            <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+                              {/* Search Bar */}
+                              <div className="relative flex-1 max-w-md">
+                                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                <input
+                                  type="text"
+                                  placeholder="Search CIs by name, class, owner, or description..."
+                                  value={searchTerm}
+                                  onChange={(e) => setSearchTerm(e.target.value)}
+                                  className="w-full pl-10 pr-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                />
+                                {searchTerm && (
+                                  <button
+                                    onClick={() => setSearchTerm('')}
+                                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white"
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
+
+                              {/* Sort Controls */}
+                              <div className="flex items-center space-x-3">
+                                <span className="text-gray-400 text-sm">Sort by:</span>
+                                <select
+                                  value={sortBy}
+                                  onChange={(e) => setSortBy(e.target.value)}
+                                  className="bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                >
+                                  <option value="confidence">Confidence</option>
+                                  <option value="risk">Risk Level</option>
+                                  <option value="name">CI Name</option>
+                                  <option value="date">Days Inactive</option>
+                                </select>
+                                
+                                <button
+                                  onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                                  className="px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white transition-colors"
+                                  title={`Sort ${sortOrder === 'asc' ? 'Descending' : 'Ascending'}`}
+                                >
+                                  {sortOrder === 'asc' ? (
+                                    <ArrowUp className="w-4 h-4" />
+                                  ) : (
+                                    <ArrowDown className="w-4 h-4" />
+                                  )}
+                                </button>
+
+                                {/* Toggle Assigned Section Button */}
+                                <button
+                                  onClick={() => setShowAssignedSection(!showAssignedSection)}
+                                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center space-x-2 ${
+                                    showAssignedSection 
+                                      ? 'bg-green-500/20 text-green-300 border border-green-500/30' 
+                                      : 'bg-white/10 text-gray-300 border border-white/20 hover:bg-white/20'
+                                  }`}
+                                >
+                                  <UserCheck className="w-4 h-4" />
+                                  <span>Assigned CIs ({assignedCIs.length})</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Search Results Info */}
+                            {searchTerm && (
+                              <div className="mt-3 text-sm text-gray-400">
+                                Found {getFilteredCIs().length} CIs matching "{searchTerm}"
+                                {getFilteredCIs().length !== scanResults.stale_cis.length && (
+                                  <span className="ml-2">
+                                    (from {scanResults.stale_cis.length} total)
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                         
                         {scanResults && scanResults.stale_cis && scanResults.stale_cis.length > 0 ? (
                           <div className="space-y-0">
@@ -935,12 +1085,6 @@ const ServiceNowScanner = () => {
                                                 </div>
                                               </div>
                                               
-                                              {ci.recommended_owners[0].department && (
-                                                <div className="mt-2 text-xs text-gray-400">
-                                                  Department: {ci.recommended_owners[0].department}
-                                                </div>
-                                              )}
-                                              
                                               {/* Assign Button */}
                                               <div className="mt-3 pt-3 border-t border-white/10">
                                                 {assignmentResults[ci.ci_id] ? (
@@ -1049,12 +1193,6 @@ const ServiceNowScanner = () => {
                                                         {owner.fields_modified}
                                                       </div>
                                                     </div>
-                                                    
-                                                    {owner.department && (
-                                                      <div className="mt-2 text-xs text-gray-400">
-                                                        Department: {owner.department}
-                                                      </div>
-                                                    )}
                                                     
                                                     {/* Assign Button for Alternate */}
                                                     <div className="mt-3 pt-3 border-t border-white/10">
@@ -1265,7 +1403,7 @@ const ServiceNowScanner = () => {
                                       <div>
                                         <h4 className="text-white font-semibold text-lg">{group.recommended_owner.display_name}</h4>
                                         <div className="text-gray-400 text-sm">
-                                          {group.recommended_owner.username} • {group.recommended_owner.department}
+                                          {group.recommended_owner.username}
                                         </div>
                                       </div>
                                     </div>
@@ -1320,6 +1458,105 @@ const ServiceNowScanner = () => {
                                 </div>
                               </div>
                             ))}
+                          </div>
+                        </div>
+                      </CardContainer>
+                    )}
+
+                    {/* Assigned CIs Section */}
+                    {showAssignedSection && assignedCIs.length > 0 && (
+                      <CardContainer>
+                        <div className="overflow-hidden">
+                          <div className="p-6 border-b border-white/10">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <h3 className="text-2xl font-bold text-white flex items-center">
+                                  <CheckCircle2 className="w-6 h-6 mr-3 text-green-400" />
+                                  Successfully Assigned CIs
+                                </h3>
+                                <p className="text-gray-400 mt-2">CIs that have been successfully reassigned to new owners</p>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-2xl font-bold text-green-400">{assignedCIs.length}</div>
+                                <div className="text-gray-400 text-sm">Assignments</div>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div className="space-y-0">
+                            {assignedCIs.map((ci, idx) => (
+                              <div key={`assigned-${ci.ci_id}-${idx}`} className="border-b border-white/10 last:border-b-0">
+                                <div className="p-6 hover:bg-white/5 transition-colors">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center space-x-4 flex-1">
+                                      <div className="flex items-center">
+                                        <CheckCircle2 className="w-5 h-5 text-green-400 mr-3" />
+                                        <div className="w-10 h-10 rounded-lg bg-gradient-to-r from-green-500 to-emerald-500 flex items-center justify-center">
+                                          <Database className="w-5 h-5 text-white" />
+                                        </div>
+                                      </div>
+                                      
+                                      <div className="flex-1">
+                                        <div className="flex items-center space-x-3 mb-2">
+                                          <h4 className="text-white font-semibold">{ci.ci_name}</h4>
+                                          <span className={`px-2 py-1 text-xs rounded border ${getRiskColor(ci.risk_level)}`}>
+                                            {ci.risk_level}
+                                          </span>
+                                        </div>
+                                        
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                                          <div>
+                                            <span className="text-gray-400">CI Class:</span>
+                                            <span className="text-white ml-2">{ci.ci_class}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-gray-400">Previous Owner:</span>
+                                            <span className="text-white ml-2">{ci.current_owner}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-gray-400">New Owner:</span>
+                                            <span className="text-green-400 ml-2 font-medium">{ci.assigned_to}</span>
+                                          </div>
+                                        </div>
+                                        
+                                        <div className="mt-3 flex items-center justify-between text-xs">
+                                          <div className="text-gray-400">
+                                            Assigned: {new Date(ci.assignment_timestamp).toLocaleString()}
+                                          </div>
+                                          <div className="text-green-400 bg-green-500/10 px-2 py-1 rounded">
+                                            ✓ {ci.assignment_message || 'Successfully assigned'}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="text-right ml-4">
+                                      <div className="text-lg font-bold text-green-400">{(ci.confidence * 100).toFixed(0)}%</div>
+                                      <div className="text-xs text-gray-400">Original Confidence</div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          
+                          {/* Clear Assigned CIs Button */}
+                          <div className="p-6 border-t border-white/10 bg-white/2">
+                            <div className="flex justify-between items-center">
+                              <div className="text-sm text-gray-400">
+                                Total: {assignedCIs.length} successfully assigned CIs
+                              </div>
+                              <button
+                                onClick={() => {
+                                  if (window.confirm('Clear all assigned CIs from this list? This will not affect the actual assignments in ServiceNow.')) {
+                                    setAssignedCIs([]);
+                                  }
+                                }}
+                                className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 hover:text-red-200 rounded-lg transition-all text-sm"
+                              >
+                                Clear List
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </CardContainer>

@@ -319,6 +319,35 @@ class RuleBasedStalenessDetector:
         except:
             return datetime(1900, 1, 1)
 
+    def _clean_department_field(self, dept_field):
+        """Clean department field to remove ServiceNow link information"""
+        if not dept_field:
+            return 'Unknown'
+        
+        # If it's a simple string, return as is
+        if isinstance(dept_field, str) and not dept_field.startswith('{') and 'link' not in dept_field.lower():
+            return dept_field
+        
+        # If it's a dict (ServiceNow reference field), extract display_value
+        if isinstance(dept_field, dict):
+            return dept_field.get('display_value', dept_field.get('value', 'Unknown'))
+        
+        # If it's a string that looks like a dict/JSON or contains link info, clean it up
+        if isinstance(dept_field, str) and (dept_field.startswith('{') or 'link' in dept_field.lower()):
+            try:
+                import json
+                if dept_field.startswith('{'):
+                    dept_data = json.loads(dept_field)
+                    return dept_data.get('display_value', dept_data.get('value', 'Unknown'))
+                else:
+                    # If it contains link info but isn't JSON, just return "Unknown"
+                    return 'Unknown'
+            except:
+                return 'Unknown'
+        
+        # Default fallback
+        return str(dept_field) if dept_field else 'Unknown'
+
     def _evaluate_rule(self, features: Dict, conditions: List[str]) -> bool:
         """Evaluate if all conditions are met"""
         for condition in conditions:
@@ -407,17 +436,62 @@ class RuleBasedStalenessDetector:
                         consistency = data['count'] / activity_span
                         score += min(consistency * 10, 10)
 
-                # Get display name for this user
-                display_name = username_to_display_name.get(user, user)
-                
-                # Get department info - we'll get this from the broader user data context
+                # Get display name for this user - handle both sys_id and username cases
+                display_name = user
                 department = 'Unknown'
+                
+                # Try multiple strategies to get the display name
                 user_data_context = ci_data.get('user_data_context', {})
-                if user in user_data_context:
-                    department = user_data_context[user].get('department', 'Unknown')
+                user_by_sys_id = ci_data.get('user_by_sys_id', {})
+                
+                # Strategy 1: Check if user is in username_to_display_name mapping (user is username)
+                if user in username_to_display_name:
+                    display_name = username_to_display_name[user]
+                    if user in user_data_context:
+                        dept_raw = user_data_context[user].get('department', 'Unknown')
+                        department = self._clean_department_field(dept_raw)
+                
+                # Strategy 2: Check if user is a sys_id in user_by_sys_id mapping
+                elif user in user_by_sys_id:
+                    user_record = user_by_sys_id[user]
+                    display_name = user_record.get('name', user)
+                    dept_raw = user_record.get('department', 'Unknown')
+                    department = self._clean_department_field(dept_raw)
+                
+                # Strategy 3: Try to get display name from audit records if available
+                else:
+                    for record in audit_records:
+                        if record.get('user') == user and record.get('user_display_name'):
+                            display_name = record.get('user_display_name')
+                            break
+                
+                # Strategy 4: If user looks like a sys_id (long hex string), try to find it in user data
+                if display_name == user and len(user) > 20 and all(c in '0123456789abcdef' for c in user.lower()):
+                    # This looks like a sys_id, try to find the corresponding user
+                    for username, user_record in user_data_context.items():
+                        if user_record.get('sys_id') == user:
+                            display_name = user_record.get('name', username)
+                            dept_raw = user_record.get('department', 'Unknown')
+                            department = self._clean_department_field(dept_raw)
+                            break
+
+                # Determine the actual username to use for assignment
+                actual_username = user
+                
+                # If user looks like a sys_id, find the corresponding username
+                if len(user) > 20 and all(c in '0123456789abcdef' for c in user.lower()):
+                    # This looks like a sys_id, try to find the corresponding username
+                    for username, user_record in user_data_context.items():
+                        if user_record.get('sys_id') == user:
+                            actual_username = username
+                            break
+                    # Also check user_by_sys_id mapping
+                    if actual_username == user and user in user_by_sys_id:
+                        user_record = user_by_sys_id[user]
+                        actual_username = user_record.get('user_name', user)
 
                 user_scores.append({
-                    'user': user,
+                    'user': actual_username,  # Use actual username for assignment
                     'display_name': display_name,
                     'score': score,
                     'activity_count': data['count'],
@@ -452,16 +526,9 @@ class RuleBasedStalenessDetector:
         if ci_owner_display_names is None:
             ci_owner_display_names = {}
             
-        # Build lookup for audit and user data
-        audit_by_ci = {}
-        for _, row in audit_df.iterrows():
-            doc_key = row.get('documentkey')
-            if doc_key:
-                # Convert pandas Series to dict to avoid JSON serialization issues
-                audit_by_ci.setdefault(doc_key, []).append({k: v for k, v in row.to_dict().items()})
-        
-        # Convert user and CI data to regular dicts
+        # Convert user and CI data to regular dicts first
         user_by_name = {}
+        user_by_sys_id = {}
         username_to_display_name = {}  # Create mapping for display names
         for _, u in user_df.iterrows():
             user_dict = {k: v for k, v in u.to_dict().items()}
@@ -471,11 +538,71 @@ class RuleBasedStalenessDetector:
                 # Map username to display name
                 display_name = str(u.get('name', user_name))  # Use 'name' field as display name, fallback to username
                 username_to_display_name[user_name] = display_name
+            if u.get('sys_id'):
+                sys_id = str(u.get('sys_id'))
+                user_by_sys_id[sys_id] = user_dict
+        
+        # Build lookup for audit data
+        audit_by_ci = {}
+        for _, row in audit_df.iterrows():
+            doc_key = row.get('documentkey')
+            
+            # Extract the actual document key value if it's a dict
+            if isinstance(doc_key, dict):
+                doc_key = doc_key.get('value', doc_key.get('display_value', ''))
+            
+            if doc_key:
+                # Convert pandas Series to dict to avoid JSON serialization issues
+                audit_record = {k: v for k, v in row.to_dict().items()}
+                
+                # Clean up all dict fields to extract their values
+                for field_name, field_value in audit_record.items():
+                    if isinstance(field_value, dict):
+                        # For most fields, prefer display_value, fallback to value
+                        if field_name == 'sys_created_on':
+                            # For dates, prefer the actual datetime value
+                            audit_record[field_name] = field_value.get('value', field_value.get('display_value', ''))
+                        else:
+                            audit_record[field_name] = field_value.get('display_value', field_value.get('value', ''))
+                
+                # Extract user display name from expanded user fields if available
+                user_field = row.get('user')  # Get original user field from row
+                if isinstance(user_field, dict):
+                    # If user is expanded, extract the display name
+                    user_display_name = user_field.get('display_value', '')
+                    user_name_field = row.get('user.user_name')
+                    if isinstance(user_name_field, dict):
+                        user_username = user_name_field.get('display_value', user_name_field.get('value', ''))
+                    else:
+                        user_username = user_name_field or user_field.get('value', '')
+                    
+                    # Update the audit record with clean user information
+                    audit_record['user'] = user_username
+                    audit_record['user_display_name'] = user_display_name
+                elif user_field:
+                    # If user is just a string, try to get display name from user data
+                    audit_record['user'] = str(user_field)
+                    audit_record['user_display_name'] = username_to_display_name.get(str(user_field), str(user_field))
+                
+                audit_by_ci.setdefault(str(doc_key), []).append(audit_record)
         
         ci_by_id = {}
         for _, ci in ci_df.iterrows():
-            if ci.get('sys_id'):
-                ci_by_id[str(ci.get('sys_id'))] = {k: v for k, v in ci.to_dict().items()}
+            ci_sys_id = ci.get('sys_id')
+            # Handle sys_id that might be a dict with display_value/value
+            if isinstance(ci_sys_id, dict):
+                ci_sys_id = ci_sys_id.get('value', ci_sys_id.get('display_value', ''))
+            
+            if ci_sys_id:
+                ci_by_id[str(ci_sys_id)] = {k: v for k, v in ci.to_dict().items()}
+        
+        print(f"DEBUG: Built ci_by_id mapping with {len(ci_by_id)} entries")
+        if ci_by_id:
+            sample_ci_id = list(ci_by_id.keys())[0]
+            sample_ci_data = ci_by_id[sample_ci_id]
+            print(f"DEBUG: Sample CI {sample_ci_id} has keys: {list(sample_ci_data.keys())}")
+            if 'name' in sample_ci_data:
+                print(f"DEBUG: Sample CI name: {sample_ci_data['name']} (type: {type(sample_ci_data['name'])})")
 
         for _, label in labels_df.iterrows():
             # Convert label to dict to avoid pandas Series issues
@@ -487,13 +614,20 @@ class RuleBasedStalenessDetector:
             audit_records = audit_by_ci.get(str(ci_id), [])
             user_info = user_by_name.get(str(assigned_owner), {})
             
+            # Debug logging for first few CIs to see CI info lookup
+            if len(stale_cis) < 3:
+                print(f"DEBUG CI Lookup {ci_id}: ci_info keys={list(ci_info.keys()) if ci_info else 'EMPTY'}")
+                if ci_info and 'name' in ci_info:
+                    print(f"DEBUG CI name field: {ci_info['name']} (type: {type(ci_info['name'])})")
+            
             ci_data = {
                 'ci_info': ci_info,
                 'audit_records': audit_records,
                 'user_info': user_info,
                 'assigned_owner': assigned_owner,
                 'username_to_display_name': username_to_display_name,  # Pass the mapping
-                'user_data_context': user_by_name  # Pass all user data for department lookup
+                'user_data_context': user_by_name,  # Pass all user data for department lookup
+                'user_by_sys_id': user_by_sys_id  # Pass sys_id mapping for better lookups
             }
             
             result = self.predict_single(ci_data)
@@ -511,16 +645,34 @@ class RuleBasedStalenessDetector:
                 
                 # Ensure all data is JSON serializable
                 # Get the display name for the current owner - try CI mapping first, then username mapping
-                current_owner_display_name = (
-                    ci_owner_display_names.get(str(ci_id)) or 
-                    username_to_display_name.get(str(assigned_owner), str(assigned_owner))
-                )
+                ci_mapping_result = ci_owner_display_names.get(str(ci_id))
+                username_mapping_result = username_to_display_name.get(str(assigned_owner))
+                current_owner_display_name = ci_mapping_result or username_mapping_result or str(assigned_owner)
+                
+                # Debug logging for first few CIs
+                if len(stale_cis) < 3:
+                    print(f"DEBUG CI {ci_id}: assigned_owner='{assigned_owner}', ci_mapping='{ci_mapping_result}', username_mapping='{username_mapping_result}', final='{current_owner_display_name}'")
+                
+                # Extract CI name properly (might be a dict with display_value/value)
+                ci_name = ci_info.get('name', 'Unknown')
+                if isinstance(ci_name, dict):
+                    ci_name = ci_name.get('display_value', ci_name.get('value', 'Unknown'))
+                
+                # Extract CI class properly
+                ci_class = ci_info.get('sys_class_name', 'Unknown')
+                if isinstance(ci_class, dict):
+                    ci_class = ci_class.get('display_value', ci_class.get('value', 'Unknown'))
+                
+                # Extract CI description properly
+                ci_description = ci_info.get('short_description', '')
+                if isinstance(ci_description, dict):
+                    ci_description = ci_description.get('display_value', ci_description.get('value', ''))
                 
                 stale_ci_dict = {
                     'ci_id': str(ci_id),
-                    'ci_name': str(ci_info.get('name', 'Unknown')),
-                    'ci_class': str(ci_info.get('sys_class_name', 'Unknown')),
-                    'ci_description': str(ci_info.get('short_description', '')),
+                    'ci_name': str(ci_name),
+                    'ci_class': str(ci_class),
+                    'ci_description': str(ci_description),
                     'current_owner': current_owner_display_name,
                     'current_owner_username': str(assigned_owner),  # Keep username for technical reference
                     'confidence': float(confidence),

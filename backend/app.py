@@ -220,7 +220,8 @@ def fetch_ci_data(instance_url, username, password, limit=10000):
             headers=headers,
             params={
                 'sysparm_limit': limit,
-                'sysparm_fields': 'sys_id,name,short_description,sys_class_name,sys_updated_on,assigned_to,assigned_to.user_name,assigned_to.name'
+                'sysparm_fields': 'sys_id,name,short_description,sys_class_name,sys_updated_on,assigned_to,assigned_to.user_name,assigned_to.name,assigned_to.sys_id',
+                'sysparm_display_value': 'all'
             },
             timeout=60
         )
@@ -251,7 +252,8 @@ def fetch_audit_data(instance_url, username, password, limit=20000):
             headers=headers,
             params={
                 'sysparm_limit': limit,
-                'sysparm_fields': 'sys_created_on,tablename,fieldname,documentkey,user,oldvalue,newvalue',
+                'sysparm_fields': 'sys_created_on,tablename,fieldname,documentkey,user,user.user_name,user.name,user.sys_id,oldvalue,newvalue',
+                'sysparm_display_value': 'all'
             },
             timeout=120
         )
@@ -281,7 +283,7 @@ def fetch_user_data(instance_url, username, password, limit=5000):
             headers=headers,
             params={
                 'sysparm_limit': limit,
-                'sysparm_fields': 'user_name,name,email,active,sys_created_on,department'
+                'sysparm_fields': 'sys_id,user_name,name,email,active,sys_created_on,department'
             },
             timeout=60
         )
@@ -306,7 +308,14 @@ def analyze_cis_with_model(ci_data, audit_data, user_data):
     
     # Log a sample CI for debugging
     if len(ci_data) > 0:
-        logger.info(f"Sample CI: {ci_data[0]}")
+        sample_ci = ci_data[0]
+        logger.info(f"Sample CI keys: {list(sample_ci.keys())}")
+        logger.info(f"Sample CI name: {sample_ci.get('name', 'N/A')}")
+        if 'assigned_to' in sample_ci:
+            logger.info(f"Sample CI assigned_to structure: {sample_ci['assigned_to']}")
+            logger.info(f"Sample CI assigned_to type: {type(sample_ci['assigned_to'])}")
+        else:
+            logger.info("No assigned_to field found in sample CI")
     
     # Log sample audit data
     if len(audit_data) > 0:
@@ -314,39 +323,101 @@ def analyze_cis_with_model(ci_data, audit_data, user_data):
         
     # Log sample user data
     if len(user_data) > 0:
-        logger.info(f"Sample user: {user_data[0]}")
+        sample_user = user_data[0]
+        logger.info(f"Sample user keys: {list(sample_user.keys())}")
+        logger.info(f"Sample user name: {sample_user.get('name', 'N/A')}")
+        logger.info(f"Sample user user_name: {sample_user.get('user_name', 'N/A')}")
+        logger.info(f"Sample user sys_id: {sample_user.get('sys_id', 'N/A')}")
     
     # Create labels DataFrame from CI data
     labels_data = []
     ci_owner_display_names = {}  # Map CI ID to owner display name for later use
+    user_by_sys_id = {}  # Create mapping by sys_id for better lookup
+    user_by_name = {}    # Create mapping by username for better lookup
+    
+    # Build user mappings for better display name resolution
+    for user in user_data:
+        if user.get('sys_id'):
+            user_by_sys_id[user.get('sys_id')] = user
+        if user.get('user_name'):
+            user_by_name[user.get('user_name')] = user
     
     for ci in ci_data:
         assigned_to = ci.get('assigned_to', None)
         assigned_owner = ''
         assigned_owner_display_name = ''
         
+        # Extract CI sys_id properly (it might be a dict with display_value/value)
+        ci_sys_id = ci.get('sys_id')
+        if isinstance(ci_sys_id, dict):
+            ci_sys_id = ci_sys_id.get('value', ci_sys_id.get('display_value', ''))
+        
         if isinstance(assigned_to, dict):
-            # Try user_name first (this is the username), then value, then name
-            assigned_owner = assigned_to.get('user_name') or assigned_to.get('value') or assigned_to.get('name', '')
-            # Get display name from the assigned_to object
-            assigned_owner_display_name = assigned_to.get('name', assigned_owner)
-        elif assigned_to:
-            assigned_owner = str(assigned_to)
-            assigned_owner_display_name = assigned_owner  # Fallback to username
+            # ServiceNow returns expanded reference fields as objects
+            # The assigned_to field has display_value (human name) and value (sys_id)
+            assigned_owner_display_name = assigned_to.get('display_value', '')
+            assigned_to_sys_id = assigned_to.get('value', '')
             
-        if assigned_owner:
+            # Try to get the username from expanded fields or look it up
+            expanded_user_name = ci.get('assigned_to.user_name')
+            if isinstance(expanded_user_name, dict):
+                expanded_user_name = expanded_user_name.get('display_value', expanded_user_name.get('value', ''))
+            
+            assigned_owner = expanded_user_name or assigned_to.get('user_name', '')
+            
+            # If we don't have a username but have sys_id, look it up in user data
+            if not assigned_owner and assigned_to_sys_id:
+                user_record = user_by_sys_id.get(assigned_to_sys_id)
+                if user_record:
+                    assigned_owner = user_record.get('user_name', '')
+                    # Use the display name from user record if we don't have one
+                    if not assigned_owner_display_name:
+                        assigned_owner_display_name = user_record.get('name', assigned_owner)
+            
+            # If still no username, use the sys_id as fallback
+            if not assigned_owner:
+                assigned_owner = assigned_to_sys_id
+                        
+        elif assigned_to:
+            # If assigned_to is just a string (sys_id or username), look it up
+            assigned_to_str = str(assigned_to)
+            
+            # First try to look up by sys_id, then by username
+            user_record = user_by_sys_id.get(assigned_to_str) or user_by_name.get(assigned_to_str)
+            if user_record:
+                assigned_owner_display_name = user_record.get('name', assigned_to_str)
+                assigned_owner = user_record.get('user_name', assigned_to_str)
+            else:
+                # If no user record found, assume it's a username and keep it as is
+                assigned_owner = assigned_to_str
+                assigned_owner_display_name = assigned_to_str
+                
+        if assigned_owner and ci_sys_id:
             labels_data.append({
-                'ci_id': ci.get('sys_id'),
+                'ci_id': ci_sys_id,
                 'assigned_owner': assigned_owner
             })
-            # Store display name mapping
-            ci_owner_display_names[ci.get('sys_id')] = assigned_owner_display_name
+            # Store display name mapping - prefer the resolved display name
+            final_display_name = assigned_owner_display_name or assigned_owner
+            ci_owner_display_names[ci_sys_id] = final_display_name
+            
+            # Debug log for first few CIs
+            if len(labels_data) <= 3:
+                logger.info(f"CI {ci_sys_id}: assigned_owner='{assigned_owner}', display_name='{final_display_name}'")
             
     labels_df = pd.DataFrame(labels_data)
     
     logger.info(f"CIs with assigned owners: {len(labels_df)} out of {len(ci_data)}")
     if len(labels_df) > 0:
         logger.info(f"Sample assigned owner: {labels_df.iloc[0].to_dict()}")
+    
+    # Debug the ci_owner_display_names mapping
+    logger.info(f"ci_owner_display_names mapping has {len(ci_owner_display_names)} entries")
+    if ci_owner_display_names:
+        # Show first few mappings
+        sample_mappings = list(ci_owner_display_names.items())[:3]
+        for ci_id, display_name in sample_mappings:
+            logger.info(f"CI {ci_id} -> '{display_name}'")
     
     if len(labels_df) == 0:
         logger.warning("No CIs with assigned owners found")
