@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database, ChevronUp, ChevronLeft, MoreHorizontal, UserPlus, CheckCircle2, X, ArrowUp, ArrowDown } from 'lucide-react';
+import { Listbox } from '@headlessui/react';
 
 // Aceternity UI Components
 
@@ -513,6 +514,13 @@ const ServiceNowScanner = () => {
     // Don't reset assignedCIs as they should persist across scans
   }, [scanResults]);
 
+  const sortOptions = [
+    { value: 'confidence', label: 'Confidence' },
+    { value: 'risk', label: 'Risk Level' },
+    { value: 'name', label: 'CI Name (A-Z)' },
+    { value: 'date', label: 'Days Inactive' },
+  ];
+
   return (
     <div className="min-h-screen bg-black relative overflow-hidden">
       {/* Fixed black background to prevent white overflow */}
@@ -892,16 +900,28 @@ const ServiceNowScanner = () => {
                               {/* Sort Controls */}
                               <div className="flex items-center space-x-3">
                                 <span className="text-gray-400 text-sm">Sort by:</span>
-                                <select
-                                  value={sortBy}
-                                  onChange={(e) => setSortBy(e.target.value)}
-                                  className="bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-                                >
-                                  <option value="confidence">Confidence</option>
-                                  <option value="risk">Risk Level</option>
-                                  <option value="name">CI Name</option>
-                                  <option value="date">Days Inactive</option>
-                                </select>
+                                <Listbox value={sortBy} onChange={setSortBy}>
+                                  <div className="relative">
+                                    <Listbox.Button className="bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-gray-200 text-sm w-48 text-left">
+                                      {sortOptions.find(opt => opt.value === sortBy)?.label}
+                                    </Listbox.Button>
+                                    <Listbox.Options className="absolute mt-1 w-48 bg-[#23232b] border border-white/20 rounded-lg shadow-lg z-10">
+                                      {sortOptions.map(option => (
+                                        <Listbox.Option
+                                          key={option.value}
+                                          value={option.value}
+                                          className={({ active }) =>
+                                            `cursor-pointer select-none px-4 py-2 text-gray-200 ${
+                                              active ? 'bg-white/20' : ''
+                                            }`
+                                          }
+                                        >
+                                          {option.label}
+                                        </Listbox.Option>
+                                      ))}
+                                    </Listbox.Options>
+                                  </div>
+                                </Listbox>
                                 
                                 <button
                                   onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
