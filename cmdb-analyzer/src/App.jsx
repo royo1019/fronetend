@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database, ChevronUp, ChevronLeft, MoreHorizontal, UserPlus, CheckCircle2, X, ArrowUp, ArrowDown } from 'lucide-react';
+import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database, ChevronUp, ChevronLeft, MoreHorizontal, UserPlus, CheckCircle2, X, ArrowUp, ArrowDown, History, RotateCcw } from 'lucide-react';
 import { Listbox } from '@headlessui/react';
 
 // Aceternity UI Components
@@ -170,6 +170,10 @@ const ServiceNowScanner = () => {
   const [sortBy, setSortBy] = useState('confidence'); // 'confidence', 'risk', 'name', 'date'
   const [sortOrder, setSortOrder] = useState('desc'); // 'asc', 'desc'
   const [showAssignedSection, setShowAssignedSection] = useState(false); // Toggle assigned CIs section
+  const [showAssignmentHistory, setShowAssignmentHistory] = useState(false); // Toggle assignment history
+  const [assignmentHistory, setAssignmentHistory] = useState([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [undoingAssignment, setUndoingAssignment] = useState(null);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -502,6 +506,90 @@ const ServiceNowScanner = () => {
     }
   };
 
+  const fetchAssignmentHistory = async () => {
+    if (!connectionStatus?.success) {
+      alert('Please establish a successful connection first');
+      return;
+    }
+
+    setIsLoadingHistory(true);
+    try {
+      const response = await fetch('http://localhost:5000/assignment-history');
+      const result = await response.json();
+      
+      if (response.ok && result.success) {
+        setAssignmentHistory(result.history);
+      } else {
+        alert(result.error || 'Failed to fetch assignment history');
+      }
+    } catch (error) {
+      alert('Network error while fetching history');
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  const handleUndoAssignment = async (assignmentId) => {
+    if (!connectionStatus?.success) {
+      alert('Please establish a successful connection first');
+      return;
+    }
+
+    if (!window.confirm('Are you sure you want to undo this assignment?')) {
+      return;
+    }
+
+    setUndoingAssignment(assignmentId);
+    try {
+      const response = await fetch('http://localhost:5000/undo-assignment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          instance_url: formData.instanceUrl,
+          username: formData.username,
+          password: formData.password,
+          assignment_id: assignmentId
+        }),
+      });
+
+      const result = await response.json();
+      
+      if (response.ok && result.success) {
+        // Refresh the history
+        await fetchAssignmentHistory();
+        // Update the UI to reflect the change
+        if (scanResults && scanResults.stale_cis) {
+          const assignment = assignmentHistory.find(a => a.id === assignmentId);
+          if (assignment) {
+            const updatedStaleCs = scanResults.stale_cis.map(ci => {
+              if (ci.ci_id === assignment.ci_id) {
+                return {
+                  ...ci,
+                  current_owner: assignment.previous_owner.display_name
+                };
+              }
+              return ci;
+            });
+            
+            setScanResults(prev => ({
+              ...prev,
+              stale_cis: updatedStaleCs
+            }));
+          }
+        }
+      } else {
+        alert(result.error || 'Failed to undo assignment');
+      }
+    } catch (error) {
+      console.error('Error during undo:', error);
+      alert('Network error while undoing assignment');
+    } finally {
+      setUndoingAssignment(null);
+    }
+  };
+
   // Reset pagination when new results come in
   useEffect(() => {
     setCurrentPage(1);
@@ -513,6 +601,14 @@ const ServiceNowScanner = () => {
     setSearchTerm(''); // Reset search
     // Don't reset assignedCIs as they should persist across scans
   }, [scanResults]);
+
+  // Add this to your useEffect that handles successful assignments
+  useEffect(() => {
+    if (assignmentResults && Object.keys(assignmentResults).length > 0) {
+      // After a successful assignment, refresh the history
+      fetchAssignmentHistory();
+    }
+  }, [assignmentResults]);
 
   const sortOptions = [
     { value: 'confidence', label: 'Confidence' },
@@ -936,17 +1032,30 @@ const ServiceNowScanner = () => {
                                 </button>
 
                                 {/* Toggle Assigned Section Button */}
-                                <button
-                                  onClick={() => setShowAssignedSection(!showAssignedSection)}
-                                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center space-x-2 ${
-                                    showAssignedSection 
-                                      ? 'bg-green-500/20 text-green-300 border border-green-500/30' 
-                                      : 'bg-white/10 text-gray-300 border border-white/20 hover:bg-white/20'
-                                  }`}
-                                >
-                                  <UserCheck className="w-4 h-4" />
-                                  <span>Assigned CIs ({assignedCIs.length})</span>
-                                </button>
+                                <div className="flex items-center space-x-2">
+                                  <button
+                                    onClick={() => setShowAssignedSection(!showAssignedSection)}
+                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center space-x-2 ${
+                                      showAssignedSection 
+                                        ? 'bg-green-500/20 text-green-300 border border-green-500/30' 
+                                        : 'bg-white/10 text-gray-300 border border-white/20 hover:bg-white/20'
+                                    }`}
+                                  >
+                                    <UserCheck className="w-4 h-4" />
+                                    <span>Assigned CIs ({assignedCIs.length})</span>
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      setShowAssignmentHistory(true);
+                                      fetchAssignmentHistory();
+                                    }}
+                                    className="px-4 py-2 bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white rounded-lg transition-all text-sm flex items-center space-x-2 border border-white/20"
+                                  >
+                                    <History className="w-4 h-4" />
+                                    <span>Assignment History</span>
+                                  </button>
+                                </div>
                               </div>
                             </div>
 
@@ -1598,6 +1707,146 @@ const ServiceNowScanner = () => {
           </div>
         </div>
       </div>
+
+      {/* Assignment History Modal */}
+      {showAssignmentHistory && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-gray-900 rounded-xl border border-white/10 w-full max-w-4xl max-h-[80vh] overflow-hidden">
+            <div className="p-6 border-b border-white/10 flex items-center justify-between">
+              <div>
+                <h3 className="text-2xl font-bold text-white flex items-center">
+                  <History className="w-6 h-6 mr-3 text-purple-400" />
+                  CI Assignment History
+                </h3>
+                <p className="text-gray-400 mt-2">Track and manage CI ownership changes</p>
+              </div>
+              <button
+                onClick={() => setShowAssignmentHistory(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto max-h-[calc(80vh-140px)]">
+              {isLoadingHistory ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
+                  <span className="ml-3 text-gray-400">Loading assignment history...</span>
+                </div>
+              ) : assignmentHistory.length === 0 ? (
+                <div className="text-center py-12">
+                  <History className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                  <p className="text-gray-400">No assignment history found</p>
+                  <p className="text-sm text-gray-500 mt-2">Assignment history will appear here after CIs are assigned to new owners</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {assignmentHistory.map((assignment) => (
+                    <div
+                      key={assignment.id}
+                      className={`bg-white/5 rounded-lg border ${
+                        assignment.is_undo ? 'border-blue-500/30' : 'border-white/10'
+                      } p-4`}
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center space-x-3">
+                          {assignment.is_undo ? (
+                            <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
+                              <RotateCcw className="w-5 h-5 text-blue-400" />
+                            </div>
+                          ) : (
+                            <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                              <UserPlus className="w-5 h-5 text-purple-400" />
+                            </div>
+                          )}
+                          <div>
+                            <h4 className="text-white font-medium">{assignment.ci_name}</h4>
+                            <p className="text-sm text-gray-400">{assignment.ci_class}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm text-gray-400">
+                            {new Date(assignment.timestamp).toLocaleString()}
+                          </div>
+                          {!assignment.is_undo && (
+                            <button
+                              onClick={() => handleUndoAssignment(assignment.id)}
+                              disabled={undoingAssignment === assignment.id}
+                              className={`mt-2 px-3 py-1 rounded text-xs font-medium flex items-center space-x-1 ${
+                                undoingAssignment === assignment.id
+                                  ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                                  : 'bg-blue-500/20 text-blue-300 hover:bg-blue-500/30'
+                              }`}
+                            >
+                              {undoingAssignment === assignment.id ? (
+                                <>
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                  <span>Undoing...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <RotateCcw className="w-3 h-3" />
+                                  <span>Undo</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div className="bg-black/20 rounded p-3">
+                          <div className="text-gray-400 mb-1">Previous Owner</div>
+                          <div className="text-white">
+                            {assignment.previous_owner?.display_name || 'Unknown'}
+                            {assignment.previous_owner?.username && (
+                              <span className="text-xs text-gray-400 ml-2">
+                                ({assignment.previous_owner.username})
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="bg-black/20 rounded p-3">
+                          <div className="text-gray-400 mb-1">New Owner</div>
+                          <div className="text-white">
+                            {assignment.new_owner?.display_name || 'Unknown'}
+                            {assignment.new_owner?.username && (
+                              <span className="text-xs text-gray-400 ml-2">
+                                ({assignment.new_owner.username})
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {assignment.is_undo && (
+                        <div className="mt-3 text-xs text-blue-400 bg-blue-500/10 rounded p-2">
+                          This is an undo operation of a previous assignment
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="p-6 border-t border-white/10 bg-white/2">
+              <div className="flex justify-between items-center">
+                <div className="text-sm text-gray-400">
+                  Total: {assignmentHistory.length} assignment records
+                </div>
+                <button
+                  onClick={() => setShowAssignmentHistory(false)}
+                  className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-all text-sm"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

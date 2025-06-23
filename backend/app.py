@@ -6,6 +6,11 @@ import pandas as pd
 from datetime import datetime
 from create_model import RuleBasedStalenessDetector
 import logging
+import json
+from typing import Dict, List, Optional
+import os
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +22,24 @@ CORS(app)
 # Load the ML model
 MODEL_PATH = 'staleness_detector_model.pkl'
 model = None
+
+# Store assignment history in memory (in production this should be in a database)
+assignment_history = []
+
+# Configure retry strategy
+retry_strategy = Retry(
+    total=3,  # number of retries
+    backoff_factor=1,  # wait 1, 2, 4 seconds between retries
+    status_forcelist=[408, 429, 500, 502, 503, 504]  # HTTP status codes to retry on
+)
+http_adapter = HTTPAdapter(max_retries=retry_strategy)
+
+def create_session():
+    """Create a requests session with retry logic"""
+    session = requests.Session()
+    session.mount("http://", http_adapter)
+    session.mount("https://", http_adapter)
+    return session
 
 def load_model():
     """Load the pickle model"""
@@ -599,6 +622,7 @@ def reload_model():
 @app.route('/assign-ci-owner', methods=['POST'])
 def assign_ci_owner():
     """Assign a CI to a new owner by updating the assigned_to field"""
+    session = create_session()
     try:
         data = request.get_json()
         instance_url = data.get('instance_url')
@@ -610,62 +634,296 @@ def assign_ci_owner():
         if not all([instance_url, username, password, ci_id, new_owner_username]):
             return jsonify({'error': 'Missing required parameters'}), 400
         
-        # First, get the user's sys_id from the username
-        user_url = f"{instance_url}/api/now/table/sys_user"
-        user_response = requests.get(
-            user_url,
-            auth=(username, password),
-            headers={'Accept': 'application/json'},
-            params={'sysparm_query': f'user_name={new_owner_username}', 'sysparm_limit': 1},
-            timeout=30
-        )
-        
-        if user_response.status_code != 200:
-            return jsonify({'error': 'Failed to find user in ServiceNow'}), 500
-        
-        user_data = user_response.json().get('result', [])
-        if not user_data:
-            return jsonify({'error': f'User {new_owner_username} not found in ServiceNow'}), 404
-        
-        user_sys_id = user_data[0].get('sys_id')
-        user_display_name = user_data[0].get('name', new_owner_username)
-        
-        # Update the CI's assigned_to field with the user's name (not sys_id)
+        # First, get the current owner information with expanded reference fields
         ci_url = f"{instance_url}/api/now/table/cmdb_ci/{ci_id}"
-        update_data = {
-            'assigned_to': user_display_name  # Use display name instead of sys_id
-        }
-        
-        update_response = requests.patch(
-            ci_url,
-            auth=(username, password),
-            headers={
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
-            },
-            json=update_data,
-            timeout=30
-        )
-        
-        if update_response.status_code == 200:
-            logger.info(f"Successfully assigned CI {ci_id} to user {user_display_name} (username: {new_owner_username})")
-            return jsonify({
-                'success': True,
-                'message': f'CI successfully assigned to {user_display_name}',
-                'new_owner': {
-                    'username': new_owner_username,
-                    'display_name': user_display_name,
-                    'sys_id': user_sys_id
+        try:
+            ci_response = session.get(
+                ci_url,
+                auth=(username, password),
+                headers={'Accept': 'application/json'},
+                params={
+                    'sysparm_fields': 'assigned_to,name,sys_class_name,assigned_to.user_name,assigned_to.name',
+                    'sysparm_display_value': 'all'  # Get both display values and actual values
+                },
+                timeout=(30, 90)  # (connect timeout, read timeout)
+            )
+            
+            if ci_response.status_code != 200:
+                error_msg = f"Failed to fetch CI information: HTTP {ci_response.status_code}"
+                logger.error(error_msg)
+                return jsonify({'error': error_msg}), 500
+                
+            ci_data = ci_response.json().get('result', {})
+            
+            # Extract current owner information
+            current_owner_info = ci_data.get('assigned_to', {})
+            if isinstance(current_owner_info, dict):
+                current_owner = {
+                    'display_name': current_owner_info.get('display_value', 'Unknown'),
+                    'sys_id': current_owner_info.get('value', ''),
+                    'username': ci_data.get('assigned_to.user_name', {}).get('display_value', '')
                 }
-            })
-        else:
-            error_msg = f"Failed to update CI assignment: {update_response.status_code}"
+            else:
+                current_owner = {
+                    'display_name': 'Unknown',
+                    'sys_id': '',
+                    'username': ''
+                }
+            
+            ci_name = ci_data.get('name', {}).get('display_value', 'Unknown')
+            ci_class = ci_data.get('sys_class_name', {}).get('display_value', 'Unknown')
+            
+        except requests.exceptions.Timeout:
+            error_msg = "Timeout while fetching CI information. Please try again."
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 504
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Error fetching CI information: {str(e)}"
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 500
+        
+        # Get the new owner's information
+        user_url = f"{instance_url}/api/now/table/sys_user"
+        try:
+            user_response = session.get(
+                user_url,
+                auth=(username, password),
+                headers={'Accept': 'application/json'},
+                params={
+                    'sysparm_query': f'user_name={new_owner_username}',
+                    'sysparm_fields': 'sys_id,user_name,name',
+                    'sysparm_limit': 1
+                },
+                timeout=(30, 90)
+            )
+            
+            if user_response.status_code != 200:
+                error_msg = f"Failed to find user in ServiceNow: HTTP {user_response.status_code}"
+                logger.error(error_msg)
+                return jsonify({'error': error_msg}), 500
+            
+            user_data = user_response.json().get('result', [])
+            if not user_data:
+                error_msg = f"User {new_owner_username} not found in ServiceNow"
+                logger.error(error_msg)
+                return jsonify({'error': error_msg}), 404
+            
+            user_sys_id = user_data[0].get('sys_id')
+            user_display_name = user_data[0].get('name', new_owner_username)
+            
+        except requests.exceptions.Timeout:
+            error_msg = "Timeout while fetching user information. Please try again."
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 504
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Error fetching user information: {str(e)}"
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 500
+        
+        # Update the CI's assigned_to field
+        try:
+            update_data = {
+                'assigned_to': user_sys_id  # Use sys_id for assignment
+            }
+            
+            update_response = session.patch(
+                ci_url,
+                auth=(username, password),
+                headers={
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                },
+                json=update_data,
+                timeout=(30, 90)
+            )
+            
+            if update_response.status_code == 200:
+                # Store the assignment in history with complete owner information
+                assignment_record = {
+                    'id': len(assignment_history),
+                    'timestamp': datetime.now().isoformat(),
+                    'ci_id': ci_id,
+                    'ci_name': ci_name,
+                    'ci_class': ci_class,
+                    'previous_owner': {
+                        'display_name': current_owner['display_name'],
+                        'sys_id': current_owner['sys_id'],
+                        'username': current_owner['username']
+                    },
+                    'new_owner': {
+                        'username': new_owner_username,
+                        'display_name': user_display_name,
+                        'sys_id': user_sys_id
+                    },
+                    'instance_url': instance_url
+                }
+                assignment_history.append(assignment_record)
+                
+                logger.info(f"Successfully assigned CI {ci_id} to user {user_display_name}")
+                return jsonify({
+                    'success': True,
+                    'message': f'CI successfully assigned to {user_display_name}',
+                    'new_owner': {
+                        'username': new_owner_username,
+                        'display_name': user_display_name,
+                        'sys_id': user_sys_id
+                    },
+                    'assignment_id': assignment_record['id']
+                })
+            else:
+                error_msg = f"Failed to update CI assignment: HTTP {update_response.status_code}"
+                logger.error(error_msg)
+                return jsonify({'error': error_msg}), 500
+                
+        except requests.exceptions.Timeout:
+            error_msg = "Timeout while updating CI assignment. Please try again."
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 504
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Error updating CI assignment: {str(e)}"
             logger.error(error_msg)
             return jsonify({'error': error_msg}), 500
             
     except Exception as e:
-        logger.error(f"Error in assign_ci_owner: {str(e)}", exc_info=True)
-        return jsonify({'error': f'Assignment failed: {str(e)}'}), 500
+        error_msg = f"Unexpected error in assign_ci_owner: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'error': error_msg}), 500
+    finally:
+        session.close()
+
+@app.route('/assignment-history', methods=['GET'])
+def get_assignment_history():
+    """Get the history of CI assignments"""
+    try:
+        # Return the full history, sorted by timestamp descending (newest first)
+        sorted_history = sorted(assignment_history, key=lambda x: x['timestamp'], reverse=True)
+        return jsonify({
+            'success': True,
+            'history': sorted_history
+        })
+    except Exception as e:
+        logger.error(f"Error fetching assignment history: {str(e)}", exc_info=True)
+        return jsonify({'error': f'Failed to fetch history: {str(e)}'}), 500
+
+@app.route('/undo-assignment', methods=['POST'])
+def undo_assignment():
+    """Undo a CI assignment by reverting to the previous owner"""
+    session = create_session()
+    try:
+        data = request.get_json()
+        instance_url = data.get('instance_url')
+        username = data.get('username')
+        password = data.get('password')
+        assignment_id = data.get('assignment_id')
+        
+        if not all([instance_url, username, password, assignment_id]):
+            return jsonify({'error': 'Missing required parameters'}), 400
+            
+        # Find the assignment record
+        assignment = next((a for a in assignment_history if a['id'] == assignment_id), None)
+        if not assignment:
+            return jsonify({'error': 'Assignment record not found'}), 404
+            
+        # First verify the current state of the CI
+        ci_url = f"{instance_url}/api/now/table/cmdb_ci/{assignment['ci_id']}"
+        try:
+            # Get current CI state
+            ci_response = session.get(
+                ci_url,
+                auth=(username, password),
+                headers={'Accept': 'application/json'},
+                params={
+                    'sysparm_fields': 'assigned_to,name,sys_class_name,assigned_to.user_name,assigned_to.name',
+                    'sysparm_display_value': 'all'
+                },
+                timeout=(30, 90)
+            )
+            
+            if ci_response.status_code != 200:
+                error_msg = f"Failed to fetch current CI state: HTTP {ci_response.status_code}"
+                logger.error(error_msg)
+                return jsonify({'error': error_msg}), 500
+                
+            # Verify we can revert
+            if not assignment['previous_owner'].get('sys_id'):
+                logger.error("Previous owner sys_id is missing")
+                return jsonify({'error': 'Cannot undo: previous owner information is incomplete'}), 400
+                
+            # Prepare the update data
+            update_data = {
+                'assigned_to': assignment['previous_owner']['sys_id']
+            }
+            
+            # Attempt to update the CI
+            update_response = session.patch(
+                ci_url,
+                auth=(username, password),
+                headers={
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                },
+                json=update_data,
+                timeout=(30, 90)
+            )
+            
+            if update_response.status_code == 200:
+                # Verify the update was successful
+                verify_response = session.get(
+                    ci_url,
+                    auth=(username, password),
+                    headers={'Accept': 'application/json'},
+                    params={
+                        'sysparm_fields': 'assigned_to,name,sys_class_name,assigned_to.user_name,assigned_to.name',
+                        'sysparm_display_value': 'all'
+                    },
+                    timeout=(30, 90)
+                )
+                
+                if verify_response.status_code == 200:
+                    # Add a new history record for the undo operation
+                    undo_record = {
+                        'id': len(assignment_history),
+                        'timestamp': datetime.now().isoformat(),
+                        'ci_id': assignment['ci_id'],
+                        'ci_name': assignment['ci_name'],
+                        'ci_class': assignment['ci_class'],
+                        'previous_owner': assignment['new_owner'],
+                        'new_owner': assignment['previous_owner'],
+                        'instance_url': instance_url,
+                        'is_undo': True,
+                        'undoes_assignment_id': assignment_id
+                    }
+                    assignment_history.append(undo_record)
+                    
+                    return jsonify({
+                        'success': True,
+                        'message': f'Successfully reverted CI assignment to {assignment["previous_owner"]["display_name"]}',
+                        'assignment_id': undo_record['id']
+                    })
+                else:
+                    error_msg = "Failed to verify the undo operation"
+                    logger.error(error_msg)
+                    return jsonify({'error': error_msg}), 500
+            else:
+                error_msg = f"Failed to revert CI assignment: HTTP {update_response.status_code}"
+                logger.error(error_msg)
+                return jsonify({'error': error_msg}), 500
+                
+        except requests.exceptions.Timeout:
+            error_msg = "Timeout while reverting CI assignment. Please try again."
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 504
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Error reverting CI assignment: {str(e)}"
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 500
+            
+    except Exception as e:
+        error_msg = f"Unexpected error in undo_assignment: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'error': error_msg}), 500
+    finally:
+        session.close()
 
 if __name__ == '__main__':
     print("Starting CMDB Analyzer Backend with ML Model...")
