@@ -4,138 +4,164 @@ Test script to verify the model loads correctly
 Save this as test_model.py in your backend directory
 """
 
-import pickle
+import unittest
+import pandas as pd
+import sys
 import os
-from datetime import datetime
+import pickle
+import logging
+from datetime import datetime, timedelta
 
-def test_model_loading():
-    """Test if the model loads and works correctly"""
-    
-    print("Testing Model Loading...")
-    print("=" * 50)
-    
-    # Check if pickle file exists
-    model_path = 'staleness_detector_model.pkl'
-    
-    if not os.path.exists(model_path):
-        print(f"❌ ERROR: {model_path} not found!")
-        print("Please run: python create_model.py")
-        return False
-    
-    print(f"✅ Found pickle file: {model_path}")
-    print(f"File size: {os.path.getsize(model_path)} bytes")
-    
-    # Try to load the model
-    try:
-        with open(model_path, 'rb') as f:
-            model = pickle.load(f)
-        print("✅ Model loaded successfully!")
-        
-        # Check if it has the required methods
-        required_methods = ['predict_single', 'get_stale_ci_list', '_extract_features_from_servicenow_data']
-        
-        for method in required_methods:
-            if hasattr(model, method):
-                print(f"✅ Method {method} found")
+# Add the current directory to Python path to find the module
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from KB_Model import EnhancedStalenessDetector, ScenarioKnowledgeBase
+from app import analyze_cis_with_model
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class TestCMDBAnalyzer(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Set up test fixtures before running tests"""
+        try:
+            # Load or create model
+            model_path = 'KB_Model(2).pkl'
+            if os.path.exists(model_path):
+                with open(model_path, 'rb') as f:
+                    cls.model = pickle.load(f)
             else:
-                print(f"❌ Method {method} missing")
-                return False
-        
-        # Test a simple prediction
-        sample_data = {
-            'assigned_owner': 'test.user',
-            'audit_records': [
-                {
-                    'user': 'other.user',
-                    'sys_created_on': '2024-06-20 10:30:00',
-                    'fieldname': 'assigned_to'
-                }
-            ],
-            'user_info': {
-                'active': True
+                cls.model = EnhancedStalenessDetector()
+                with open(model_path, 'wb') as f:
+                    pickle.dump(cls.model, f)
+        except Exception as e:
+            print(f"Error setting up test class: {str(e)}")
+            raise
+
+    def setUp(self):
+        """Set up test fixtures before each test"""
+        # Sample test data
+        self.ci_data = [{
+            'sys_id': 'test123',
+            'name': 'Test Server',
+            'sys_class_name': 'cmdb_ci_server',
+            'sys_updated_on': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'assigned_to': {
+                'user_name': 'test.user',
+                'name': 'Test User'
             }
+        }]
+        
+        self.audit_data = [{
+            'documentkey': 'test123',
+            'sys_created_on': (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S'),
+            'user': 'different.user'
+        }]
+        
+        self.user_data = [{
+            'user_name': 'test.user',
+            'name': 'Test User',
+            'department': 'IT',
+            'title': 'System Admin',
+            'active': 'true'
+        }]
+
+    def test_model_initialization(self):
+        """Test if model is properly initialized"""
+        self.assertIsNotNone(self.model)
+        self.assertIsInstance(self.model, EnhancedStalenessDetector)
+
+    def test_single_prediction(self):
+        """Test prediction for a single CI"""
+        ci_info = {
+            'ci_data': self.ci_data[0],
+            'audit_data': self.audit_data,
+            'user_data': self.user_data
         }
         
-        print("\n🧪 Testing sample prediction...")
-        result = model.predict_single(sample_data)
+        prediction = self.model.predict_single(ci_info)
         
-        if 'is_stale' in result and 'confidence' in result:
-            print("✅ Sample prediction successful!")
-            print(f"   Result: {result['is_stale']} (confidence: {result['confidence']:.2f})")
-            return True
-        else:
-            print("❌ Sample prediction failed - invalid result format")
-            return False
-            
-    except Exception as e:
-        print(f"❌ ERROR loading model: {str(e)}")
-        return False
+        # Test prediction structure
+        self.assertIsInstance(prediction, dict)
+        self.assertIn('is_stale', prediction)
+        self.assertIn('confidence', prediction)
+        self.assertIn('reasons', prediction)
+        self.assertIn('staleness_score', prediction)  # New in KB_Model(2)
+        self.assertIn('evidence_strength', prediction)  # New in KB_Model(2)
+        self.assertIn('scenario_matches', prediction)  # New in KB_Model(2)
 
-def test_flask_integration():
-    """Test if Flask can import the model properly"""
-    print("\n🌐 Testing Flask Integration...")
-    print("=" * 50)
-    
-    try:
-        # Try importing Flask dependencies
-        import flask
-        import pandas as pd
-        import numpy as np
-        print("✅ All Flask dependencies available")
+    def test_analyze_cis_with_model(self):
+        """Test the main analysis function"""
+        results = analyze_cis_with_model(self.ci_data, self.audit_data, self.user_data)
         
-        # Test the model loading like Flask does
-        MODEL_PATH = 'staleness_detector_model.pkl'
-        
-        with open(MODEL_PATH, 'rb') as f:
-            model = pickle.load(f)
-        
-        print("✅ Model loads in Flask context")
-        
-        # Test if model works with pandas DataFrames (like Flask backend)
-        if hasattr(model, 'get_stale_ci_list'):
-            print("✅ get_stale_ci_list method available")
-        else:
-            print("❌ get_stale_ci_list method missing")
-            return False
-            
-        return True
-        
-    except ImportError as e:
-        print(f"❌ Missing dependency: {str(e)}")
-        print("Please run: pip install flask pandas numpy scikit-learn")
-        return False
-    except Exception as e:
-        print(f"❌ Flask integration test failed: {str(e)}")
-        return False
+        # Test results structure
+        self.assertIsInstance(results, list)
+        if results:  # If any stale CIs found
+            stale_ci = results[0]
+            self.assertIn('ci_id', stale_ci)
+            self.assertIn('ci_name', stale_ci)
+            self.assertIn('current_owner', stale_ci)
+            self.assertIn('staleness_score', stale_ci)  # New in KB_Model(2)
+            self.assertIn('evidence_strength', stale_ci)  # New in KB_Model(2)
+            self.assertIn('scenario_matches', stale_ci)  # New in KB_Model(2)
 
-if __name__ == "__main__":
-    print(f"Model Loading Test - {datetime.now()}")
-    print("=" * 60)
-    
-    # Test basic model loading
-    model_ok = test_model_loading()
-    
-    # Test Flask integration
-    flask_ok = test_flask_integration()
-    
-    print("\n" + "=" * 60)
-    print("SUMMARY:")
-    print("=" * 60)
-    
-    if model_ok and flask_ok:
-        print("🎉 ALL TESTS PASSED!")
-        print("Your model should work with the Flask backend.")
-        print("\nNext steps:")
-        print("1. Start your Flask app: python app.py")
-        print("2. Check the health endpoint: curl http://localhost:5000/health")
-        print("3. Look for 'model_loaded': true in the response")
-    else:
-        print("❌ TESTS FAILED!")
-        if not model_ok:
-            print("- Model loading failed")
-        if not flask_ok:
-            print("- Flask integration failed")
-        print("\nTroubleshooting:")
-        print("1. Recreate the model: python create_model.py")
-        print("2. Install dependencies: pip install flask pandas numpy scikit-learn")
-        print("3. Check file permissions")
+    def test_scenario_matching(self):
+        """Test scenario matching functionality"""
+        ci_info = {
+            'ci_data': self.ci_data[0],
+            'audit_data': self.audit_data,
+            'user_data': self.user_data
+        }
+        
+        prediction = self.model.predict_single(ci_info)
+        
+        # Test scenario matches
+        self.assertIn('scenario_matches', prediction)
+        if prediction['scenario_matches']:
+            scenario = prediction['scenario_matches'][0]
+            self.assertIn('name', scenario)
+            self.assertIn('confidence', scenario)
+            self.assertIn('context', scenario)
+
+    def test_evidence_strength(self):
+        """Test evidence strength calculation"""
+        ci_info = {
+            'ci_data': self.ci_data[0],
+            'audit_data': self.audit_data,
+            'user_data': self.user_data
+        }
+        
+        prediction = self.model.predict_single(ci_info)
+        
+        # Test evidence strength
+        self.assertIn('evidence_strength', prediction)
+        self.assertIn(prediction['evidence_strength'], ['Strong', 'Medium', 'Weak'])
+
+    def test_staleness_score(self):
+        """Test staleness score calculation"""
+        ci_info = {
+            'ci_data': self.ci_data[0],
+            'audit_data': self.audit_data,
+            'user_data': self.user_data
+        }
+        
+        prediction = self.model.predict_single(ci_info)
+        
+        # Test staleness score
+        self.assertIn('staleness_score', prediction)
+        self.assertIsInstance(prediction['staleness_score'], float)
+        self.assertTrue(0.0 <= prediction['staleness_score'] <= 1.0)
+
+    def tearDown(self):
+        """Clean up after each test"""
+        pass
+
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up after all tests"""
+        pass
+
+if __name__ == '__main__':
+    unittest.main()

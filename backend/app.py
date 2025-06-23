@@ -4,7 +4,16 @@ import requests
 import pickle
 import pandas as pd
 from datetime import datetime
-from create_model import RuleBasedStalenessDetector
+import sys
+import os
+import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# Add the current directory to Python path to find the module
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from KB_Model import EnhancedStalenessDetector, ScenarioKnowledgeBase
 import logging
 
 # Configure logging
@@ -15,8 +24,83 @@ app = Flask(__name__)
 CORS(app)
 
 # Load the ML model
-MODEL_PATH = 'staleness_detector_model.pkl'
+MODEL_PATH = 'KB_Model(2).pkl'
 model = None
+
+# ServiceNow API configuration
+CHUNK_SIZE = 1000  # Number of records to fetch per request
+MAX_RETRIES = 3
+RETRY_BACKOFF = 1
+TIMEOUT = (30, 90)  # (connect timeout, read timeout)
+
+def create_session():
+    """Create a requests session with retry logic"""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=MAX_RETRIES,
+        backoff_factor=RETRY_BACKOFF,
+        status_forcelist=[429, 500, 502, 503, 504]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+def fetch_servicenow_data(endpoint, query_params, auth):
+    """
+    Fetch data from ServiceNow in chunks with retry logic
+    
+    Args:
+        endpoint (str): API endpoint
+        query_params (dict): Query parameters
+        auth (tuple): (username, password)
+        
+    Returns:
+        list: List of records
+    """
+    session = create_session()
+    all_records = []
+    offset = 0
+    
+    while True:
+        try:
+            # Update query params for pagination
+            chunk_params = query_params.copy()
+            chunk_params['sysparm_offset'] = offset
+            chunk_params['sysparm_limit'] = CHUNK_SIZE
+            
+            response = session.get(
+                endpoint,
+                params=chunk_params,
+                auth=auth,
+                timeout=TIMEOUT
+            )
+            response.raise_for_status()
+            
+            chunk_data = response.json().get('result', [])
+            chunk_size = len(chunk_data)
+            
+            if chunk_size == 0:
+                break
+                
+            all_records.extend(chunk_data)
+            logger.info(f"Fetched {chunk_size} records (offset: {offset})")
+            
+            if chunk_size < CHUNK_SIZE:
+                break
+                
+            offset += CHUNK_SIZE
+            
+            # Small delay between chunks to avoid rate limiting
+            time.sleep(0.5)
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching data (offset {offset}): {str(e)}")
+            if offset == 0:  # If first chunk fails, raise error
+                raise
+            break  # Otherwise, return partial data
+            
+    return all_records
 
 def load_model():
     """Load the pickle model"""
@@ -28,7 +112,18 @@ def load_model():
         return True
     except Exception as e:
         logger.error(f"Failed to load model: {str(e)}")
-        return False
+        try:
+            # If loading fails, create new model
+            logger.info("Attempting to create new model instance")
+            model = EnhancedStalenessDetector()
+            # Save the model
+            with open(MODEL_PATH, 'wb') as f:
+                pickle.dump(model, f)
+            logger.info(f"Created and saved new model to {MODEL_PATH}")
+            return True
+        except Exception as e2:
+            logger.error(f"Failed to create new model: {str(e2)}")
+            return False
 
 # Load model on startup
 load_model()
@@ -150,21 +245,21 @@ def scan_stale_ownership():
         logger.info("Fetching data from ServiceNow...")
         
         # Get CI data
-        ci_data = fetch_ci_data(instance_url, username, password, limit=100000000)
+        ci_data = fetch_servicenow_data(f"{instance_url}/api/now/table/cmdb_ci", {}, (username, password))
         logger.info(f"Fetched {len(ci_data)} CI records")
         if not ci_data:
             logger.error("No CI data fetched")
             return jsonify({'error': 'Failed to fetch CI data'}), 500
 
         # Get audit data
-        audit_data = fetch_audit_data(instance_url, username, password, limit=200000000)
+        audit_data = fetch_servicenow_data(f"{instance_url}/api/now/table/sys_audit", {}, (username, password))
         logger.info(f"Fetched {len(audit_data)} audit records")
         if not audit_data:
             logger.error("No audit data fetched")
             return jsonify({'error': 'Failed to fetch audit data'}), 500
 
         # Get user data
-        user_data = fetch_user_data(instance_url, username, password, limit=500000)
+        user_data = fetch_servicenow_data(f"{instance_url}/api/now/table/sys_user", {}, (username, password))
         logger.info(f"Fetched {len(user_data)} user records")
         if not user_data:
             logger.error("No user data fetched")
@@ -181,6 +276,9 @@ def scan_stale_ownership():
                 "error": f"Model analysis failed: {str(model_exc)}"
             }), 500
 
+        # Group stale CIs by recommended owners
+        grouped_by_owners = group_cis_by_recommended_owners(stale_ci_list)
+
         return jsonify({
             'success': True,
             'message': 'Analysis completed successfully',
@@ -189,9 +287,11 @@ def scan_stale_ownership():
                 'stale_cis_found': len(stale_ci_list),
                 'high_confidence_predictions': sum(1 for ci in stale_ci_list if ci['confidence'] > 0.8),
                 'critical_risk': sum(1 for ci in stale_ci_list if ci['risk_level'] == 'Critical'),
-                'high_risk': sum(1 for ci in stale_ci_list if ci['risk_level'] == 'High')
+                'high_risk': sum(1 for ci in stale_ci_list if ci['risk_level'] == 'High'),
+                'recommended_owners_count': len(grouped_by_owners)
             },
-            'stale_cis': stale_ci_list
+            'stale_cis': stale_ci_list,
+            'grouped_by_owners': grouped_by_owners
         })
 
     except Exception as e:
@@ -200,196 +300,338 @@ def scan_stale_ownership():
             "error": f"Scan failed: {str(e)}"
         }), 500
 
-def fetch_ci_data(instance_url, username, password, limit=10000):
-    """Fetch CI data from ServiceNow"""
+@app.route('/api/fetch-data', methods=['POST'])
+def fetch_data():
+    """Fetch CI, audit, and user data from ServiceNow"""
     try:
-        url = f"{instance_url}/api/now/table/cmdb_ci"
-        headers = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-        }
+        # Get credentials from request
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        instance = data.get('instance')
         
-        response = requests.get(
-            url,
-            auth=(username, password),
-            headers=headers,
-            params={
-                'sysparm_limit': limit,
-                'sysparm_fields': 'sys_id,name,short_description,sys_class_name,sys_updated_on,assigned_to,assigned_to.user_name'
-            },
-            timeout=60
-        )
-        
-        if response.status_code == 200:
-            return response.json().get('result', [])
-        else:
-            logger.error(f"Failed to fetch CI data: {response.status_code}")
-            return []
+        if not all([username, password, instance]):
+            return jsonify({'error': 'Missing credentials'}), 400
             
-    except Exception as e:
-        logger.error(f"Error fetching CI data: {str(e)}")
-        return []
-
-def fetch_audit_data(instance_url, username, password, limit=20000):
-    """Fetch audit data from ServiceNow"""
-    try:
-        url = f"{instance_url}/api/now/table/sys_audit"
-        headers = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
+        base_url = f'https://{instance}.service-now.com/api/now/table'
+        auth = (username, password)
+        
+        # Fetch CI data
+        logger.info("Fetching CI data...")
+        ci_params = {
+            'sysparm_fields': 'sys_id,name,short_description,sys_class_name,sys_updated_on,assigned_to,assigned_to.user_name,assigned_to.name'
         }
+        ci_data = fetch_servicenow_data(f'{base_url}/cmdb_ci', ci_params, auth)
+        logger.info(f"Fetched {len(ci_data)} CI records")
         
-        # Get recent audit records
-        response = requests.get(
-            url,
-            auth=(username, password),
-            headers=headers,
-            params={
-                'sysparm_limit': limit,
-                'sysparm_fields': 'sys_created_on,tablename,fieldname,documentkey,user,oldvalue,newvalue',
-            },
-            timeout=120
-        )
-        
-        if response.status_code == 200:
-            return response.json().get('result', [])
-        else:
-            logger.error(f"Failed to fetch audit data: {response.status_code}")
-            return []
+        if not ci_data:
+            return jsonify({'error': 'No CI data fetched'}), 404
             
-    except Exception as e:
-        logger.error(f"Error fetching audit data: {str(e)}")
-        return []
-
-def fetch_user_data(instance_url, username, password, limit=5000):
-    """Fetch user data from ServiceNow"""
-    try:
-        url = f"{instance_url}/api/now/table/sys_user"
-        headers = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
+        # Fetch audit data for these CIs
+        logger.info("Fetching audit data...")
+        ci_sys_ids = [ci['sys_id'] for ci in ci_data]
+        audit_params = {
+            'sysparm_query': f"documentkey IN {','.join(ci_sys_ids)}",
+            'sysparm_fields': 'documentkey,sys_created_on,user,fieldname,oldvalue,newvalue'
         }
+        audit_data = fetch_servicenow_data(f'{base_url}/sys_audit', audit_params, auth)
+        logger.info(f"Fetched {len(audit_data)} audit records")
         
-        response = requests.get(
-            url,
-            auth=(username, password),
-            headers=headers,
-            params={
-                'sysparm_limit': limit,
-                'sysparm_fields': 'user_name,name,email,active,sys_created_on,department'
-            },
-            timeout=60
-        )
+        # Fetch user data
+        logger.info("Fetching user data...")
+        user_params = {
+            'sysparm_fields': 'user_name,name,title,department,location,email,active'
+        }
+        user_data = fetch_servicenow_data(f'{base_url}/sys_user', user_params, auth)
+        logger.info(f"Fetched {len(user_data)} user records")
         
-        if response.status_code == 200:
-            return response.json().get('result', [])
-        else:
-            logger.error(f"Failed to fetch user data: {response.status_code}")
-            return []
-            
+        # Analyze data
+        stale_cis = analyze_cis_with_model(ci_data, audit_data, user_data)
+        
+        return jsonify({
+            'ci_count': len(ci_data),
+            'audit_count': len(audit_data),
+            'user_count': len(user_data),
+            'stale_cis': stale_cis
+        })
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"ServiceNow API error: {str(e)}")
+        return jsonify({'error': f'ServiceNow API error: {str(e)}'}), 503
     except Exception as e:
-        logger.error(f"Error fetching user data: {str(e)}")
-        return []
+        logger.error(f"Error processing request: {str(e)}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 def analyze_cis_with_model(ci_data, audit_data, user_data):
-    """Analyze CIs using the ML model and return stale CI list"""
-    
-    # Convert to pandas DataFrames
-    ci_df = pd.DataFrame(ci_data)
-    audit_df = pd.DataFrame(audit_data)
-    user_df = pd.DataFrame(user_data)
-    
-    # Log a sample CI for debugging
-    if len(ci_data) > 0:
-        logger.info(f"Sample CI: {ci_data[0]}")
-    
-    # Log sample audit data
-    if len(audit_data) > 0:
-        logger.info(f"Sample audit record: {audit_data[0]}")
+    """Analyze CIs using the KB model to detect stale ownership"""
+    try:
+        stale_ci_list = []
         
-    # Log sample user data
-    if len(user_data) > 0:
-        logger.info(f"Sample user: {user_data[0]}")
+        # Convert data to pandas DataFrames
+        ci_df = pd.DataFrame(ci_data)
+        audit_df = pd.DataFrame(audit_data)
+        user_df = pd.DataFrame(user_data)
+        
+        # Process each CI
+        for _, ci in ci_df.iterrows():
+            try:
+                # Prepare data for single CI prediction
+                ci_info = {
+                    'ci_data': ci.to_dict(),
+                    'audit_data': audit_df[audit_df['documentkey'] == ci['sys_id']].to_dict('records'),
+                    'user_data': user_df.to_dict('records')
+                }
+                
+                # Get prediction and details from model
+                prediction = model.predict_single(ci_info)
+                
+                if prediction.get('is_stale', False):
+                    # Extract owner information
+                    assigned_to = ci.get('assigned_to', {})
+                    current_owner = assigned_to.get('user_name', 'Unassigned') if isinstance(assigned_to, dict) else str(assigned_to)
+                    owner_display_name = assigned_to.get('name', current_owner) if isinstance(assigned_to, dict) else current_owner
+                    
+                    stale_ci = {
+                        'ci_id': ci['sys_id'],
+                        'ci_name': ci['name'],
+                        'current_owner': current_owner,
+                        'owner_display_name': owner_display_name,
+                        'ci_class': ci['sys_class_name'],
+                        'last_updated': ci['sys_updated_on'],
+                        'confidence': prediction.get('confidence', 0.0),
+                        'risk_level': prediction.get('risk_level', 'Medium'),
+                        'staleness_reasons': prediction.get('reasons', []),
+                        'recommended_actions': prediction.get('recommended_actions', []),
+                        'suggested_owners': prediction.get('suggested_owners', []),
+                        'staleness_score': prediction.get('staleness_score', 0.0),
+                        'evidence_strength': prediction.get('evidence_strength', 'Medium'),
+                        'scenario_matches': prediction.get('scenario_matches', [])
+                    }
+                    stale_ci_list.append(stale_ci)
+                    
+            except Exception as ci_error:
+                logger.warning(f"Error processing CI {ci['sys_id']}: {str(ci_error)}")
+                continue
+        
+        # Sort by staleness score descending
+        stale_ci_list.sort(key=lambda x: x['staleness_score'], reverse=True)
+        
+        # Log analysis results
+        logger.info(f"Analysis complete: Found {len(stale_ci_list)} stale CIs out of {len(ci_df)} total CIs")
+        if stale_ci_list:
+            high_confidence = sum(1 for ci in stale_ci_list if ci['confidence'] > 0.8)
+            critical_risk = sum(1 for ci in stale_ci_list if ci['risk_level'] == 'Critical')
+            strong_evidence = sum(1 for ci in stale_ci_list if ci['evidence_strength'] == 'Strong')
+            logger.info(f"High confidence: {high_confidence}, Critical risk: {critical_risk}, Strong evidence: {strong_evidence}")
+        
+        return stale_ci_list
+        
+    except Exception as e:
+        logger.error(f"Error in analyze_cis_with_model: {str(e)}", exc_info=True)
+        raise
+
+def group_cis_by_recommended_owners(stale_ci_list):
+    """
+    Group stale CIs by their recommended owners for bulk assignment analysis
+    """
+    grouped = {}
     
-    # Create labels DataFrame from CI data
-    labels_data = []
-    for ci in ci_data:
-        assigned_to = ci.get('assigned_to', None)
-        assigned_owner = ''
-        if isinstance(assigned_to, dict):
-            # Try user_name, then value, then name
-            assigned_owner = assigned_to.get('user_name') or assigned_to.get('value') or assigned_to.get('name', '')
-        elif assigned_to:
-            assigned_owner = str(assigned_to)
-        if assigned_owner:
-            labels_data.append({
-                'ci_id': ci.get('sys_id'),
-                'assigned_owner': assigned_owner
+    for ci in stale_ci_list:
+        recommended_owners = ci.get('recommended_owners', [])
+        
+        # If CI has recommended owners, group by the top recommendation
+        if recommended_owners and len(recommended_owners) > 0:
+            top_recommendation = recommended_owners[0]  # Get the best recommendation
+            username = top_recommendation.get('username', 'Unknown')
+            
+            if username not in grouped:
+                grouped[username] = {
+                    'recommended_owner': {
+                        'username': username,
+                        'display_name': top_recommendation.get('display_name', username),
+                        'department': top_recommendation.get('department', 'Unknown'),
+                        'avg_score': 0,
+                        'total_activity_count': 0
+                    },
+                    'cis_to_assign': [],
+                    'total_cis': 0,
+                    'risk_breakdown': {
+                        'Critical': 0,
+                        'High': 0,
+                        'Medium': 0,
+                        'Low': 0
+                    },
+                    'avg_confidence': 0
+                }
+            
+            # Add CI to this owner's group
+            grouped[username]['cis_to_assign'].append({
+                'ci_id': ci.get('ci_id'),
+                'ci_name': ci.get('ci_name'),
+                'ci_class': ci.get('ci_class'),
+                'current_owner': ci.get('current_owner'),
+                'confidence': ci.get('confidence'),
+                'risk_level': ci.get('risk_level'),
+                'staleness_reasons': ci.get('staleness_reasons', [])
             })
-    labels_df = pd.DataFrame(labels_data)
-    
-    logger.info(f"CIs with assigned owners: {len(labels_df)} out of {len(ci_data)}")
-    if len(labels_df) > 0:
-        logger.info(f"Sample assigned owner: {labels_df.iloc[0].to_dict()}")
-    
-    if len(labels_df) == 0:
-        logger.warning("No CIs with assigned owners found")
-        return []
-    
-    # Convert dates in audit data
-    if len(audit_df) > 0:
-        audit_df['sys_created_on'] = pd.to_datetime(audit_df['sys_created_on'], errors='coerce')
-        logger.info(f"Audit records date range: {audit_df['sys_created_on'].min()} to {audit_df['sys_created_on'].max()}")
-    
-    logger.info(f"Analyzing {len(labels_df)} CIs with assigned owners...")
-    
-    # Get stale CI list from model
-    stale_ci_list = model.get_stale_ci_list(labels_df, audit_df, user_df, ci_df)
-    
-    logger.info(f"Found {len(stale_ci_list)} stale CIs")
-    
-    # If no stale CIs found, let's debug the first few CIs
-    if len(stale_ci_list) == 0 and len(labels_df) > 0:
-        logger.info("No stale CIs found. Debugging first CI...")
-        first_ci = labels_df.iloc[0]
-        ci_id = first_ci['ci_id']
-        assigned_owner = first_ci['assigned_owner']
+            
+            # Update aggregated statistics
+            grouped[username]['total_cis'] += 1
+            grouped[username]['risk_breakdown'][ci.get('risk_level', 'Low')] += 1
+            
+            # Update averages
+            current_total = grouped[username]['total_cis']
+            current_avg_confidence = grouped[username]['avg_confidence']
+            grouped[username]['avg_confidence'] = (
+                (current_avg_confidence * (current_total - 1) + ci.get('confidence', 0)) / current_total
+            )
+            
+            # Update owner stats
+            current_avg_score = grouped[username]['recommended_owner']['avg_score']
+            grouped[username]['recommended_owner']['avg_score'] = (
+                (current_avg_score * (current_total - 1) + top_recommendation.get('score', 0)) / current_total
+            )
+            grouped[username]['recommended_owner']['total_activity_count'] += top_recommendation.get('activity_count', 0)
         
-        # Get audit records for this CI
-        ci_audit_records = audit_df[audit_df['documentkey'] == ci_id] if 'documentkey' in audit_df.columns else pd.DataFrame()
-        logger.info(f"First CI {ci_id} has {len(ci_audit_records)} audit records")
-        
-        # Get user info
-        user_info = user_df[user_df['user_name'] == assigned_owner].iloc[0].to_dict() if len(user_df[user_df['user_name'] == assigned_owner]) > 0 else {}
-        logger.info(f"User info for {assigned_owner}: {user_info}")
-        
-        # Test model prediction manually
-        ci_info = ci_df[ci_df['sys_id'] == ci_id].iloc[0].to_dict() if len(ci_df[ci_df['sys_id'] == ci_id]) > 0 else {}
-        test_ci_data = {
-            'ci_info': ci_info,
-            'audit_records': ci_audit_records.to_dict('records'),
-            'user_info': user_info,
-            'assigned_owner': assigned_owner
-        }
-        
-        test_result = model.predict_single(test_ci_data)
-        logger.info(f"Test prediction for first CI: {test_result}")
+        else:
+            # Handle CIs with no recommendations
+            if 'No Recommendation' not in grouped:
+                grouped['No Recommendation'] = {
+                    'recommended_owner': {
+                        'username': 'No Recommendation',
+                        'display_name': 'No Suitable Owner Found',
+                        'department': 'Manual Review Required',
+                        'avg_score': 0,
+                        'total_activity_count': 0
+                    },
+                    'cis_to_assign': [],
+                    'total_cis': 0,
+                    'risk_breakdown': {
+                        'Critical': 0,
+                        'High': 0,
+                        'Medium': 0,
+                        'Low': 0
+                    },
+                    'avg_confidence': 0
+                }
+            
+            grouped['No Recommendation']['cis_to_assign'].append({
+                'ci_id': ci.get('ci_id'),
+                'ci_name': ci.get('ci_name'),
+                'ci_class': ci.get('ci_class'),
+                'current_owner': ci.get('current_owner'),
+                'confidence': ci.get('confidence'),
+                'risk_level': ci.get('risk_level'),
+                'staleness_reasons': ci.get('staleness_reasons', [])
+            })
+            
+            grouped['No Recommendation']['total_cis'] += 1
+            grouped['No Recommendation']['risk_breakdown'][ci.get('risk_level', 'Low')] += 1
+            
+            current_total = grouped['No Recommendation']['total_cis']
+            current_avg_confidence = grouped['No Recommendation']['avg_confidence']
+            grouped['No Recommendation']['avg_confidence'] = (
+                (current_avg_confidence * (current_total - 1) + ci.get('confidence', 0)) / current_total
+            )
     
-    return stale_ci_list
+    # Convert to list and sort by total CIs (most CIs first)
+    grouped_list = []
+    for username, data in grouped.items():
+        # Round averages for cleaner display
+        data['avg_confidence'] = round(data['avg_confidence'], 2)
+        data['recommended_owner']['avg_score'] = round(data['recommended_owner']['avg_score'], 1)
+        
+        grouped_list.append({
+            'username': username,
+            **data
+        })
+    
+    # Sort by total CIs descending (owners with most CIs first)
+    grouped_list.sort(key=lambda x: x['total_cis'], reverse=True)
+    
+    return grouped_list
 
 @app.route('/reload-model', methods=['POST'])
 def reload_model():
     """Reload the ML model"""
-    if load_model():
-        return jsonify({
-            'success': True,
-            'message': 'Model reloaded successfully'
-        })
-    else:
-        return jsonify({
-            'success': False,
-            'error': 'Failed to reload model'
-        }), 500
+    try:
+        global model
+        with open('KB_Model(2).pkl', 'rb') as f:
+            model = pickle.load(f)
+        return jsonify({'success': True, 'message': 'Model reloaded successfully'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/assign-ci-owner', methods=['POST'])
+def assign_ci_owner():
+    """Assign a CI to a new owner by updating the assigned_to field"""
+    try:
+        data = request.get_json()
+        instance_url = data.get('instance_url')
+        username = data.get('username')
+        password = data.get('password')
+        ci_id = data.get('ci_id')
+        new_owner_username = data.get('new_owner_username')
+        
+        if not all([instance_url, username, password, ci_id, new_owner_username]):
+            return jsonify({'error': 'Missing required parameters'}), 400
+        
+        # First, get the user's sys_id from the username
+        user_url = f"{instance_url}/api/now/table/sys_user"
+        user_response = requests.get(
+            user_url,
+            auth=(username, password),
+            headers={'Accept': 'application/json'},
+            params={'sysparm_query': f'user_name={new_owner_username}', 'sysparm_limit': 1},
+            timeout=30
+        )
+        
+        if user_response.status_code != 200:
+            return jsonify({'error': 'Failed to find user in ServiceNow'}), 500
+        
+        user_data = user_response.json().get('result', [])
+        if not user_data:
+            return jsonify({'error': f'User {new_owner_username} not found in ServiceNow'}), 404
+        
+        user_sys_id = user_data[0].get('sys_id')
+        user_display_name = user_data[0].get('name', new_owner_username)
+        
+        # Update the CI's assigned_to field with the user's name (not sys_id)
+        ci_url = f"{instance_url}/api/now/table/cmdb_ci/{ci_id}"
+        update_data = {
+            'assigned_to': user_display_name  # Use display name instead of sys_id
+        }
+        
+        update_response = requests.patch(
+            ci_url,
+            auth=(username, password),
+            headers={
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            json=update_data,
+            timeout=30
+        )
+        
+        if update_response.status_code == 200:
+            logger.info(f"Successfully assigned CI {ci_id} to user {user_display_name} (username: {new_owner_username})")
+            return jsonify({
+                'success': True,
+                'message': f'CI successfully assigned to {user_display_name}',
+                'new_owner': {
+                    'username': new_owner_username,
+                    'display_name': user_display_name,
+                    'sys_id': user_sys_id
+                }
+            })
+        else:
+            error_msg = f"Failed to update CI assignment: {update_response.status_code}"
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 500
+            
+    except Exception as e:
+        logger.error(f"Error in assign_ci_owner: {str(e)}", exc_info=True)
+        return jsonify({'error': f'Assignment failed: {str(e)}'}), 500
 
 if __name__ == '__main__':
     print("Starting CMDB Analyzer Backend with ML Model...")
