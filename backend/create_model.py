@@ -51,9 +51,9 @@ class RuleBasedStalenessDetector:
                 'scenarios': ['7', '10', '15']
             },
             'extended_inactivity': {
-                'description': 'No owner activity for 30+ days',
+                'description': 'No owner activity for 150+ days',
                 'conditions': [
-                    'days_since_owner_activity > 30',
+                    'days_since_owner_activity > 150',
                     'recent_other_activities >= 0'
                 ],
                 'confidence': 0.85,

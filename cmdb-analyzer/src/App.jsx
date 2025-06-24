@@ -156,11 +156,12 @@ const ServiceNowScanner = () => {
   const [scanResults, setScanResults] = useState(null);
   const [scanProgress, setScanProgress] = useState(0);
   const [expandedCI, setExpandedCI] = useState(null);
-  const [showGroupedView, setShowGroupedView] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(50);
   const [expandedAlternates, setExpandedAlternates] = useState(new Set());
-  const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'critical', 'high', 'medium', 'low'
+  const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'critical', 'high', 'medium', 'low', 'by-owner'
+  const [selectedOwnerFilter, setSelectedOwnerFilter] = useState('all'); // 'all' or specific owner username
+  const [expandedOwner, setExpandedOwner] = useState(null); // Track which owner's CIs are expanded
   const [assigningCIs, setAssigningCIs] = useState(new Set()); // Track CIs being assigned
   const [assignmentResults, setAssignmentResults] = useState({}); // Track assignment results
   
@@ -312,8 +313,23 @@ const ServiceNowScanner = () => {
     
     let filteredCIs = scanResults.stale_cis;
     
-    // Apply risk level filter
-    if (activeFilter !== 'all') {
+    // Apply owner-based filter (only high risk and critical)
+    if (activeFilter === 'by-owner') {
+      // First filter to only high risk and critical CIs
+      filteredCIs = filteredCIs.filter(ci => 
+        ci.risk_level === 'Critical' || ci.risk_level === 'High'
+      );
+      
+      // Then filter by selected owner if not 'all'
+      if (selectedOwnerFilter !== 'all') {
+        filteredCIs = filteredCIs.filter(ci => 
+          ci.recommended_owners && 
+          ci.recommended_owners.length > 0 && 
+          ci.recommended_owners[0].username === selectedOwnerFilter
+        );
+      }
+    } else if (activeFilter !== 'all') {
+      // Apply regular risk level filter
       filteredCIs = filteredCIs.filter(ci => {
         const riskLevel = ci.risk_level ? ci.risk_level.toLowerCase() : '';
         return riskLevel === activeFilter;
@@ -381,6 +397,92 @@ const ServiceNowScanner = () => {
     setCurrentPage(1); // Reset to first page when filter changes
     setExpandedCI(null); // Close any expanded CI
     setExpandedAlternates(new Set()); // Clear expanded alternates
+    
+    // Reset owner filter when switching away from by-owner
+    if (filter !== 'by-owner') {
+      setSelectedOwnerFilter('all');
+    }
+  };
+
+  // Get recommended owners statistics for high risk and critical CIs
+  const getRecommendedOwnersStats = () => {
+    if (!scanResults || !scanResults.stale_cis || !Array.isArray(scanResults.stale_cis)) return [];
+    
+    const highRiskCIs = scanResults.stale_cis.filter(ci => 
+      ci.risk_level === 'Critical' || ci.risk_level === 'High'
+    );
+    
+    const ownerStats = {};
+    
+    highRiskCIs.forEach(ci => {
+      if (ci.recommended_owners && ci.recommended_owners.length > 0) {
+        const primaryOwner = ci.recommended_owners[0];
+        const mappedOwner = mapSystemToAdmin(primaryOwner.username, primaryOwner.display_name);
+        const key = mappedOwner.username;
+        
+        if (!ownerStats[key]) {
+          ownerStats[key] = {
+            username: mappedOwner.username,
+            display_name: mappedOwner.display_name,
+            total_cis: 0,
+            critical_count: 0,
+            high_count: 0,
+            avg_confidence: 0,
+            confidences: []
+          };
+        }
+        
+        ownerStats[key].total_cis++;
+        ownerStats[key].confidences.push(ci.confidence || 0);
+        
+        if (ci.risk_level === 'Critical') {
+          ownerStats[key].critical_count++;
+        } else if (ci.risk_level === 'High') {
+          ownerStats[key].high_count++;
+        }
+      }
+    });
+    
+    // Calculate average confidence and sort by total CIs
+    return Object.values(ownerStats)
+      .map(owner => ({
+        ...owner,
+        avg_confidence: owner.confidences.length > 0 
+          ? (owner.confidences.reduce((sum, conf) => sum + conf, 0) / owner.confidences.length)
+          : 0
+      }))
+      .sort((a, b) => b.total_cis - a.total_cis);
+  };
+
+  // Get CIs for a specific owner
+  const getCIsForOwner = (ownerUsername) => {
+    if (!scanResults || !scanResults.stale_cis || !Array.isArray(scanResults.stale_cis)) return [];
+    
+    return scanResults.stale_cis.filter(ci => 
+      (ci.risk_level === 'Critical' || ci.risk_level === 'High') &&
+      ci.recommended_owners && 
+      ci.recommended_owners.length > 0 && 
+      mapSystemToAdmin(ci.recommended_owners[0].username, ci.recommended_owners[0].display_name).username === ownerUsername
+    );
+  };
+
+  // Toggle owner expansion
+  const toggleOwnerExpansion = (ownerUsername) => {
+    setExpandedOwner(expandedOwner === ownerUsername ? null : ownerUsername);
+  };
+
+  // Map system user to admin user
+  const mapSystemToAdmin = (username, displayName) => {
+    if (username?.toLowerCase() === 'system') {
+      return {
+        username: 'admin',
+        display_name: 'System Administrator'
+      };
+    }
+    return {
+      username: username,
+      display_name: displayName
+    };
   };
 
   const goToPage = (page) => {
@@ -738,7 +840,7 @@ const ServiceNowScanner = () => {
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3 top-3 text-gray-400 hover:text-white transition-colors"
+                        className="absolute right-3 top-3 text-gray-400 hover:text-purple-300 transition-colors"
                       >
                         {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
@@ -887,12 +989,12 @@ const ServiceNowScanner = () => {
                           clickable: true
                         },
                         {
-                          title: "Recommended Owners",
-                          value: (scanResults && scanResults.summary) ? (scanResults.summary.recommended_owners_count || 0) : 0,
+                          title: "Filter by Owners",
+                          value: getRecommendedOwnersStats().length,
                           icon: Users,
                           color: "text-green-400",
-                          filter: null, // Not filterable
-                          clickable: false
+                          filter: "by-owner",
+                          clickable: true
                         }
                       ].map(({ title, value, icon: Icon, color, filter, clickable }) => (
                         <CardContainer key={title}>
@@ -921,22 +1023,7 @@ const ServiceNowScanner = () => {
                       ))}
                     </div>
 
-                    {/* Toggle Button for Grouped View */}
-                    {scanResults && scanResults.grouped_by_owners && Array.isArray(scanResults.grouped_by_owners) && scanResults.grouped_by_owners.length > 0 && (
-                      <div className="flex justify-center mb-6">
-                        <button
-                          onClick={() => setShowGroupedView(!showGroupedView)}
-                          className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white font-medium rounded-lg transition-all duration-200 transform hover:scale-105 shadow-lg"
-                        >
-                          <Users className="w-5 h-5" />
-                          <span>{showGroupedView ? 'Hide' : 'Show'} Grouped by Owners</span>
-                          {showGroupedView ? 
-                            <ChevronUp className="w-4 h-4" /> : 
-                            <ChevronDown className="w-4 h-4" />
-                          }
-                        </button>
-                      </div>
-                    )}
+
 
                     {/* Stale CIs List */}
                     <CardContainer>
@@ -947,7 +1034,17 @@ const ServiceNowScanner = () => {
                               <h3 className="text-2xl font-bold text-white flex items-center">
                                 <Database className="w-6 h-6 mr-3 text-purple-400" />
                                 Stale Configuration Items
-                                {activeFilter !== 'all' && (
+                                {activeFilter === 'by-owner' && selectedOwnerFilter !== 'all' && (
+                                  <span className="ml-3 px-3 py-1 bg-blue-500/20 text-blue-300 rounded-full text-sm font-medium">
+                                    {getRecommendedOwnersStats().find(o => o.username === selectedOwnerFilter)?.display_name || selectedOwnerFilter}
+                                  </span>
+                                )}
+                                {activeFilter === 'by-owner' && selectedOwnerFilter === 'all' && (
+                                  <span className="ml-3 px-3 py-1 bg-purple-500/20 text-purple-300 rounded-full text-sm font-medium">
+                                    High Risk & Critical Only
+                                  </span>
+                                )}
+                                {activeFilter !== 'all' && activeFilter !== 'by-owner' && (
                                   <span className="ml-3 px-3 py-1 bg-purple-500/20 text-purple-300 rounded-full text-sm font-medium">
                                     {activeFilter.charAt(0).toUpperCase() + activeFilter.slice(1)} Risk Only
                                   </span>
@@ -956,15 +1053,22 @@ const ServiceNowScanner = () => {
                               <p className="text-gray-400 mt-2">
                                 {activeFilter === 'all' 
                                   ? 'Click on any CI to view detailed analysis and recommendations' 
-                                  : `Showing ${getFilteredCIs().length} ${activeFilter} risk CIs. Click summary cards above to change filter.`
+                                  : activeFilter === 'by-owner'
+                                    ? selectedOwnerFilter === 'all'
+                                      ? `Showing ${getFilteredCIs().length} high risk & critical CIs with recommendations`
+                                      : `Showing ${getFilteredCIs().length} CIs recommended for ${getRecommendedOwnersStats().find(o => o.username === selectedOwnerFilter)?.display_name || selectedOwnerFilter}`
+                                    : `Showing ${getFilteredCIs().length} ${activeFilter} risk CIs. Click summary cards above to change filter.`
                                 }
                               </p>
                             </div>
                             
                             {activeFilter !== 'all' && (
                               <button
-                                onClick={() => setFilter('all')}
-                                className="px-4 py-2 bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white rounded-lg transition-all text-sm flex items-center space-x-2"
+                                onClick={() => {
+                                  setFilter('all');
+                                  setSelectedOwnerFilter('all');
+                                }}
+                                className="px-4 py-2 bg-gradient-to-r from-purple-500/20 to-blue-500/20 hover:from-purple-500/30 hover:to-blue-500/30 border border-purple-500/30 text-purple-300 hover:text-purple-200 rounded-lg transition-all text-sm flex items-center space-x-2"
                               >
                                 <span>Clear Filter</span>
                                 <span className="text-xs bg-white/20 px-2 py-1 rounded">Show All</span>
@@ -973,8 +1077,152 @@ const ServiceNowScanner = () => {
                           </div>
                         </div>
 
+                        {/* Owner Selection Interface */}
+                        {activeFilter === 'by-owner' && scanResults && scanResults.stale_cis && getRecommendedOwnersStats().length > 0 && (
+                          <div className="p-6 border-b border-white/10 bg-white/2">
+                            <div className="mb-4">
+                              <h4 className="text-lg font-semibold text-white mb-2">Select Recommended Owner</h4>
+                              <p className="text-gray-400 text-sm">Choose an owner to view their high risk & critical CI recommendations</p>
+                            </div>
+                            
+                            <div className="space-y-3">
+                              {/* Individual Owners */}
+                              {getRecommendedOwnersStats().map((owner) => (
+                                <div key={owner.username} className="bg-white/5 rounded-lg border border-white/10 overflow-hidden">
+                                  {/* Owner Header */}
+                                  <div
+                                    onClick={() => toggleOwnerExpansion(owner.username)}
+                                    className="p-4 cursor-pointer transition-all hover:bg-white/10"
+                                  >
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center space-x-3">
+                                        <div className="w-8 h-8 rounded-full bg-gradient-to-r from-green-500 to-blue-500 flex items-center justify-center">
+                                          <UserCheck className="w-4 h-4 text-white" />
+                                        </div>
+                                        <div>
+                                          <div className="font-medium text-white">{owner.display_name}</div>
+                                          <div className="text-xs text-gray-400">{owner.username}</div>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center space-x-4">
+                                        <div className="text-right">
+                                          <div className="text-lg font-bold text-blue-400">{owner.total_cis}</div>
+                                          <div className="text-xs text-gray-400">
+                                            {owner.critical_count}C / {owner.high_count}H
+                                          </div>
+                                        </div>
+                                        <div>
+                                          {expandedOwner === owner.username ? 
+                                            <ChevronDown className="w-5 h-5 text-gray-400" /> : 
+                                            <ChevronRight className="w-5 h-5 text-gray-400" />
+                                          }
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="mt-2 grid grid-cols-2 gap-4 text-xs">
+                                      <div className="text-center">
+                                        <div className="text-red-400 font-semibold">{owner.critical_count}</div>
+                                        <div className="text-gray-400">Critical</div>
+                                      </div>
+                                      <div className="text-center">
+                                        <div className="text-orange-400 font-semibold">{owner.high_count}</div>
+                                        <div className="text-gray-400">High Risk</div>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Expanded CIs for this owner */}
+                                  {expandedOwner === owner.username && (
+                                    <div className="border-t border-white/10 bg-white/2">
+                                      <div className="p-4">
+                                        <div className="mb-3 text-sm text-gray-400">
+                                          Showing {getCIsForOwner(owner.username).length} CIs recommended for {owner.display_name}
+                                        </div>
+                                        <div className="space-y-3">
+                                          {getCIsForOwner(owner.username).map((ci) => (
+                                            <div key={ci.ci_id} className="bg-white/5 p-3 rounded-lg border border-white/10">
+                                              <div className="flex items-center justify-between mb-2">
+                                                <div className="flex items-center space-x-3">
+                                                  <div className="font-medium text-white text-sm">{ci.ci_name}</div>
+                                                  <span className={`px-2 py-1 text-xs rounded ${getRiskColor(ci.risk_level)}`}>
+                                                    {ci.risk_level}
+                                                  </span>
+                                                </div>
+                                                <div className="text-right">
+                                                  <div className="text-green-400 font-semibold text-sm">{(ci.confidence * 100).toFixed(0)}%</div>
+                                                  <div className="text-xs text-gray-400">Confidence</div>
+                                                </div>
+                                              </div>
+                                              
+                                              <div className="text-xs text-gray-400 mb-2">
+                                                <span className="font-medium">Class:</span> {ci.ci_class} • 
+                                                <span className="font-medium ml-2">Current Owner:</span> {ci.current_owner}
+                                              </div>
+                                              
+                                              {/* Assign Button */}
+                                              <div className="mt-3 pt-3 border-t border-white/10">
+                                                {assignmentResults[ci.ci_id] ? (
+                                                  <div className={`text-center p-2 rounded-lg ${
+                                                    assignmentResults[ci.ci_id].success 
+                                                      ? 'bg-green-500/20 text-green-400' 
+                                                      : 'bg-red-500/20 text-red-400'
+                                                  }`}>
+                                                    <div className="flex items-center justify-center space-x-2">
+                                                      {assignmentResults[ci.ci_id].success ? (
+                                                        <CheckCircle2 className="w-4 h-4" />
+                                                      ) : (
+                                                        <AlertCircle className="w-4 h-4" />
+                                                      )}
+                                                      <span className="text-sm font-medium">
+                                                        {assignmentResults[ci.ci_id].message}
+                                                      </span>
+                                                    </div>
+                                                    <div className="text-xs mt-1 opacity-75">
+                                                      {assignmentResults[ci.ci_id].timestamp}
+                                                    </div>
+                                                  </div>
+                                                ) : (
+                                                  <button
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      const mappedOwner = mapSystemToAdmin(owner.username, owner.display_name);
+                                                      assignCIToOwner(ci.ci_id, mappedOwner.username, mappedOwner.display_name);
+                                                    }}
+                                                    disabled={assigningCIs.has(ci.ci_id)}
+                                                    className={`w-full flex items-center justify-center space-x-2 py-2 px-4 rounded-lg font-medium transition-all text-sm ${
+                                                      assigningCIs.has(ci.ci_id)
+                                                        ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                                        : 'bg-gradient-to-r from-purple-500 to-blue-600 hover:from-purple-600 hover:to-blue-700 text-white hover:scale-105'
+                                                    }`}
+                                                  >
+                                                    {assigningCIs.has(ci.ci_id) ? (
+                                                      <>
+                                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                                        <span>Assigning...</span>
+                                                      </>
+                                                    ) : (
+                                                      <>
+                                                        <UserPlus className="w-4 h-4" />
+                                                        <span>Assign to {mapSystemToAdmin(owner.username, owner.display_name).display_name}</span>
+                                                      </>
+                                                    )}
+                                                  </button>
+                                                )}
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         {/* Search and Sort Controls */}
-                        {scanResults && scanResults.stale_cis && scanResults.stale_cis.length > 0 && (
+                        {scanResults && scanResults.stale_cis && scanResults.stale_cis.length > 0 && activeFilter !== 'by-owner' && (
                           <div className="p-6 border-b border-white/10 bg-white/2">
                             <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
                               {/* Search Bar */}
@@ -982,7 +1230,7 @@ const ServiceNowScanner = () => {
                                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
                                 <input
                                   type="text"
-                                  placeholder="Search CIs by name, class, owner, or description..."
+                                  placeholder="Search CI by name"
                                   value={searchTerm}
                                   onChange={(e) => setSearchTerm(e.target.value)}
                                   className="w-full pl-10 pr-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
@@ -990,7 +1238,7 @@ const ServiceNowScanner = () => {
                                 {searchTerm && (
                                   <button
                                     onClick={() => setSearchTerm('')}
-                                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white"
+                                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-purple-300 transition-colors"
                                   >
                                     <X className="w-4 h-4" />
                                   </button>
@@ -1025,7 +1273,7 @@ const ServiceNowScanner = () => {
                                 
                                 <button
                                   onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
-                                  className="px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white transition-colors"
+                                  className="px-3 py-2 bg-gradient-to-r from-purple-500/20 to-blue-500/20 hover:from-purple-500/30 hover:to-blue-500/30 border border-purple-500/30 text-purple-300 hover:text-purple-200 rounded-lg transition-colors"
                                   title={`Sort ${sortOrder === 'asc' ? 'Descending' : 'Ascending'}`}
                                 >
                                   {sortOrder === 'asc' ? (
@@ -1041,8 +1289,8 @@ const ServiceNowScanner = () => {
                                     onClick={() => setShowAssignedSection(!showAssignedSection)}
                                     className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center space-x-2 ${
                                       showAssignedSection 
-                                        ? 'bg-green-500/20 text-green-300 border border-green-500/30' 
-                                        : 'bg-white/10 text-gray-300 border border-white/20 hover:bg-white/20'
+                                        ? 'bg-gradient-to-r from-purple-500/20 to-blue-500/20 text-purple-300 border border-purple-500/30' 
+                                        : 'bg-white/10 text-gray-300 border border-white/20 hover:bg-gradient-to-r hover:from-purple-500/10 hover:to-blue-500/10 hover:text-purple-300'
                                     }`}
                                   >
                                     <UserCheck className="w-4 h-4" />
@@ -1054,7 +1302,7 @@ const ServiceNowScanner = () => {
                                       setShowAssignmentHistory(true);
                                       fetchAssignmentHistory();
                                     }}
-                                    className="px-4 py-2 bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white rounded-lg transition-all text-sm flex items-center space-x-2 border border-white/20"
+                                    className="px-4 py-2 bg-gradient-to-r from-purple-500/20 to-blue-500/20 hover:from-purple-500/30 hover:to-blue-500/30 border border-purple-500/30 text-purple-300 hover:text-purple-200 rounded-lg transition-all text-sm flex items-center space-x-2"
                                   >
                                     <History className="w-4 h-4" />
                                     <span>Assignment History</span>
@@ -1077,7 +1325,8 @@ const ServiceNowScanner = () => {
                           </div>
                         )}
                         
-                        {scanResults && scanResults.stale_cis && scanResults.stale_cis.length > 0 ? (
+                        {/* Show CI List only when not in owner selection mode */}
+                        {scanResults && scanResults.stale_cis && scanResults.stale_cis.length > 0 && activeFilter !== 'by-owner' ? (
                           <div className="space-y-0">
                             {getPaginatedCIs().map((ci, idx) => (
                               <div key={ci.ci_id} className="border-b border-white/10 last:border-b-0">
@@ -1242,16 +1491,18 @@ const ServiceNowScanner = () => {
                                                   </div>
                                                 ) : (
                                                   <button
-                                                    onClick={() => assignCIToOwner(
-                                                      ci.ci_id, 
-                                                      ci.recommended_owners[0].username, 
-                                                      ci.recommended_owners[0].display_name
-                                                    )}
+                                                    onClick={() => {
+                                                      const mappedOwner = mapSystemToAdmin(
+                                                        ci.recommended_owners[0].username, 
+                                                        ci.recommended_owners[0].display_name
+                                                      );
+                                                      assignCIToOwner(ci.ci_id, mappedOwner.username, mappedOwner.display_name);
+                                                    }}
                                                     disabled={assigningCIs.has(ci.ci_id)}
                                                     className={`w-full flex items-center justify-center space-x-2 py-2 px-4 rounded-lg font-medium transition-all ${
                                                       assigningCIs.has(ci.ci_id)
                                                         ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                                                        : 'bg-green-600 hover:bg-green-700 text-white hover:scale-105'
+                                                        : 'bg-gradient-to-r from-purple-500 to-blue-600 hover:from-purple-600 hover:to-blue-700 text-white hover:scale-105'
                                                     }`}
                                                   >
                                                     {assigningCIs.has(ci.ci_id) ? (
@@ -1262,7 +1513,7 @@ const ServiceNowScanner = () => {
                                                     ) : (
                                                       <>
                                                         <UserPlus className="w-4 h-4" />
-                                                        <span>Assign to {ci.recommended_owners[0].display_name}</span>
+                                                        <span>Assign to {mapSystemToAdmin(ci.recommended_owners[0].username, ci.recommended_owners[0].display_name).display_name}</span>
                                                       </>
                                                     )}
                                                   </button>
@@ -1275,7 +1526,7 @@ const ServiceNowScanner = () => {
                                               <div className="text-center">
                                                 <button
                                                   onClick={() => toggleAlternateRecommendations(ci.ci_id)}
-                                                  className="flex items-center space-x-2 mx-auto px-4 py-2 bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white rounded-lg transition-all text-sm"
+                                                  className="flex items-center space-x-2 mx-auto px-4 py-2 bg-gradient-to-r from-purple-500/20 to-blue-500/20 hover:from-purple-500/30 hover:to-blue-500/30 border border-purple-500/30 text-purple-300 hover:text-purple-200 rounded-lg transition-all text-sm"
                                                 >
                                                   <MoreHorizontal className="w-4 h-4" />
                                                   <span>
@@ -1330,16 +1581,15 @@ const ServiceNowScanner = () => {
                                                     {/* Assign Button for Alternate */}
                                                     <div className="mt-3 pt-3 border-t border-white/10">
                                                       <button
-                                                        onClick={() => assignCIToOwner(
-                                                          ci.ci_id, 
-                                                          owner.username, 
-                                                          owner.display_name
-                                                        )}
+                                                        onClick={() => {
+                                                          const mappedOwner = mapSystemToAdmin(owner.username, owner.display_name);
+                                                          assignCIToOwner(ci.ci_id, mappedOwner.username, mappedOwner.display_name);
+                                                        }}
                                                         disabled={assigningCIs.has(ci.ci_id)}
                                                         className={`w-full flex items-center justify-center space-x-2 py-2 px-3 rounded-lg font-medium transition-all text-sm ${
                                                           assigningCIs.has(ci.ci_id)
                                                             ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                                                            : 'bg-blue-600 hover:bg-blue-700 text-white hover:scale-105'
+                                                            : 'bg-gradient-to-r from-purple-500 to-blue-600 hover:from-purple-600 hover:to-blue-700 text-white hover:scale-105'
                                                         }`}
                                                       >
                                                         {assigningCIs.has(ci.ci_id) ? (
@@ -1424,7 +1674,7 @@ const ServiceNowScanner = () => {
                         )}
 
                         {/* Pagination Controls */}
-                        {getFilteredCIs().length > itemsPerPage && (
+                        {getFilteredCIs().length > itemsPerPage && activeFilter !== 'by-owner' && (
                           <div className="p-6 border-t border-white/10 bg-white/2">
                             <div className="flex items-center justify-between">
                               <div className="text-sm text-gray-400">
@@ -1444,7 +1694,7 @@ const ServiceNowScanner = () => {
                                   className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                                     currentPage === 1 
                                       ? 'bg-gray-800 text-gray-500 cursor-not-allowed' 
-                                      : 'bg-white/10 text-white hover:bg-white/20 hover:scale-105'
+                                      : 'bg-gradient-to-r from-purple-500/20 to-blue-500/20 hover:from-purple-500/30 hover:to-blue-500/30 border border-purple-500/30 text-purple-300 hover:text-purple-200 hover:scale-105'
                                   }`}
                                 >
                                   <ChevronLeft className="w-4 h-4" />
@@ -1470,8 +1720,8 @@ const ServiceNowScanner = () => {
                                         onClick={() => goToPage(pageNum)}
                                         className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                                           currentPage === pageNum
-                                            ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg'
-                                            : 'bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white'
+                                            ? 'bg-gradient-to-r from-purple-500 to-blue-600 text-white shadow-lg'
+                                            : 'bg-white/10 text-gray-300 hover:bg-gradient-to-r hover:from-purple-500/20 hover:to-blue-500/20 hover:text-purple-300 border hover:border-purple-500/30'
                                         }`}
                                       >
                                         {pageNum}
@@ -1484,7 +1734,7 @@ const ServiceNowScanner = () => {
                                       <span className="text-gray-400 px-2">...</span>
                                       <button
                                         onClick={() => goToPage(getTotalPages())}
-                                        className="px-3 py-2 rounded-lg text-sm font-medium bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white transition-all"
+                                        className="px-3 py-2 rounded-lg text-sm font-medium bg-white/10 text-gray-300 hover:bg-gradient-to-r hover:from-purple-500/20 hover:to-blue-500/20 hover:text-purple-300 border hover:border-purple-500/30 transition-all"
                                       >
                                         {getTotalPages()}
                                       </button>
@@ -1499,7 +1749,7 @@ const ServiceNowScanner = () => {
                                   className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                                     currentPage === getTotalPages() 
                                       ? 'bg-gray-800 text-gray-500 cursor-not-allowed' 
-                                      : 'bg-white/10 text-white hover:bg-white/20 hover:scale-105'
+                                      : 'bg-gradient-to-r from-purple-500/20 to-blue-500/20 hover:from-purple-500/30 hover:to-blue-500/30 border border-purple-500/30 text-purple-300 hover:text-purple-200 hover:scale-105'
                                   }`}
                                 >
                                   <ChevronRight className="w-4 h-4" />
@@ -1511,90 +1761,7 @@ const ServiceNowScanner = () => {
                       </div>
                     </CardContainer>
 
-                    {/* Grouped by Recommended Owners */}
-                    {scanResults && scanResults.grouped_by_owners && Array.isArray(scanResults.grouped_by_owners) && scanResults.grouped_by_owners.length > 0 && showGroupedView && (
-                      <CardContainer>
-                        <div className="overflow-hidden">
-                          <div className="p-6 border-b border-white/10">
-                            <h3 className="text-2xl font-bold text-white flex items-center">
-                              <Users className="w-6 h-6 mr-3 text-blue-400" />
-                              Grouped by Recommended Owners
-                            </h3>
-                            <p className="text-gray-400 mt-2">CIs grouped by recommended assignees for bulk operations</p>
-                          </div>
-                          
-                          <div className="space-y-4 p-6">
-                            {scanResults.grouped_by_owners.map((group, idx) => (
-                              <div key={group.username} className="bg-white/5 rounded-lg border border-white/10 overflow-hidden">
-                                {/* Owner Header */}
-                                <div className="p-4 bg-white/5 border-b border-white/10">
-                                  <div className="flex items-center justify-between">
-                                    <div className="flex items-center space-x-4">
-                                      <div className="w-12 h-12 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 flex items-center justify-center">
-                                        <UserCheck className="w-6 h-6 text-white" />
-                                      </div>
-                                      <div>
-                                        <h4 className="text-white font-semibold text-lg">{group.recommended_owner.display_name}</h4>
-                                        <div className="text-gray-400 text-sm">
-                                          {group.recommended_owner.username}
-                                        </div>
-                                      </div>
-                                    </div>
-                                    
-                                    {/* Statistics */}
-                                    <div className="text-right">
-                                      <div className="text-2xl font-bold text-blue-400">{group.total_cis}</div>
-                                      <div className="text-gray-400 text-sm">CIs to assign</div>
-                                    </div>
-                                  </div>
-                                  
-                                  {/* Statistics */}
-                                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4">
-                                    <div className="text-center">
-                                      <div className="text-lg font-semibold text-green-400">{group.recommended_owner.avg_score}</div>
-                                      <div className="text-xs text-gray-400">Avg Score</div>
-                                    </div>
-                                    <div className="text-center">
-                                      <div className="text-lg font-semibold text-purple-400">{(group.avg_confidence * 100).toFixed(0)}%</div>
-                                      <div className="text-xs text-gray-400">Avg Confidence</div>
-                                    </div>
-                                    <div className="text-center">
-                                      <div className="text-lg font-semibold text-red-400">{group.risk_breakdown.Critical + group.risk_breakdown.High}</div>
-                                      <div className="text-xs text-gray-400">High Risk</div>
-                                    </div>
-                                    <div className="text-center">
-                                      <div className="text-lg font-semibold text-orange-400">{group.recommended_owner.total_activity_count}</div>
-                                      <div className="text-xs text-gray-400">Total Activities</div>
-                                    </div>
-                                  </div>
-                                </div>
-                                
-                                {/* CIs List */}
-                                <div className="p-4">
-                                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                                    {group.cis_to_assign.map((ci, ciIdx) => (
-                                      <div key={ci.ci_id} className="bg-white/5 p-3 rounded-lg border border-white/10">
-                                        <div className="flex items-center justify-between mb-2">
-                                          <div className="font-medium text-white text-sm truncate">{ci.ci_name}</div>
-                                          <span className={`px-2 py-1 text-xs rounded ${getRiskColor(ci.risk_level)}`}>
-                                            {ci.risk_level}
-                                          </span>
-                                        </div>
-                                        <div className="text-xs text-gray-400 mb-2">{ci.ci_class}</div>
-                                        <div className="flex justify-between text-xs">
-                                          <span className="text-gray-400">Current: {ci.current_owner}</span>
-                                          <span className="text-green-400">{(ci.confidence * 100).toFixed(0)}%</span>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </CardContainer>
-                    )}
+
 
                     {/* Assigned CIs Section */}
                     {showAssignedSection && assignedCIs.length > 0 && (
@@ -1685,7 +1852,7 @@ const ServiceNowScanner = () => {
                                     setAssignedCIs([]);
                                   }
                                 }}
-                                className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 hover:text-red-200 rounded-lg transition-all text-sm"
+                                className="px-4 py-2 bg-gradient-to-r from-red-500/10 to-pink-500/10 hover:from-red-500/20 hover:to-pink-500/20 border border-red-500/30 text-red-300 hover:text-red-200 rounded-lg transition-all text-sm"
                               >
                                 Clear List
                               </button>
@@ -1726,7 +1893,7 @@ const ServiceNowScanner = () => {
               </div>
               <button
                 onClick={() => setShowAssignmentHistory(false)}
-                className="text-gray-400 hover:text-white"
+                className="text-gray-400 hover:text-purple-300 transition-colors"
               >
                 <X className="w-6 h-6" />
               </button>
@@ -1780,7 +1947,7 @@ const ServiceNowScanner = () => {
                               className={`mt-2 px-3 py-1 rounded text-xs font-medium flex items-center space-x-1 ${
                                 undoingAssignment === assignment.id
                                   ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                                  : 'bg-blue-500/20 text-blue-300 hover:bg-blue-500/30'
+                                  : 'bg-gradient-to-r from-purple-500/20 to-blue-500/20 text-purple-300 hover:from-purple-500/30 hover:to-blue-500/30 border border-purple-500/30'
                               }`}
                             >
                               {undoingAssignment === assignment.id ? (
@@ -1842,7 +2009,7 @@ const ServiceNowScanner = () => {
                 </div>
                 <button
                   onClick={() => setShowAssignmentHistory(false)}
-                  className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-all text-sm"
+                  className="px-4 py-2 bg-gradient-to-r from-purple-500/20 to-blue-500/20 hover:from-purple-500/30 hover:to-blue-500/30 border border-purple-500/30 text-purple-300 hover:text-purple-200 rounded-lg transition-all text-sm"
                 >
                   Close
                 </button>

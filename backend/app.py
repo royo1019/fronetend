@@ -250,9 +250,19 @@ def fetch_ci_data(instance_url, username, password, limit=10000):
         )
         
         if response.status_code == 200:
-            return response.json().get('result', [])
+            try:
+                json_data = response.json()
+                result = json_data.get('result', [])
+                if not isinstance(result, list):
+                    logger.error(f"CI data result is not a list: {type(result)} - {result}")
+                    return []
+                logger.info(f"Successfully fetched {len(result)} CI records")
+                return result
+            except (ValueError, KeyError) as e:
+                logger.error(f"Failed to parse CI data JSON: {str(e)} - Response: {response.text[:500]}")
+                return []
         else:
-            logger.error(f"Failed to fetch CI data: {response.status_code}")
+            logger.error(f"Failed to fetch CI data: {response.status_code} - {response.text[:500]}")
             return []
             
     except Exception as e:
@@ -282,9 +292,19 @@ def fetch_audit_data(instance_url, username, password, limit=20000):
         )
         
         if response.status_code == 200:
-            return response.json().get('result', [])
+            try:
+                json_data = response.json()
+                result = json_data.get('result', [])
+                if not isinstance(result, list):
+                    logger.error(f"Audit data result is not a list: {type(result)} - {result}")
+                    return []
+                logger.info(f"Successfully fetched {len(result)} audit records")
+                return result
+            except (ValueError, KeyError) as e:
+                logger.error(f"Failed to parse audit data JSON: {str(e)} - Response: {response.text[:500]}")
+                return []
         else:
-            logger.error(f"Failed to fetch audit data: {response.status_code}")
+            logger.error(f"Failed to fetch audit data: {response.status_code} - {response.text[:500]}")
             return []
             
     except Exception as e:
@@ -312,9 +332,19 @@ def fetch_user_data(instance_url, username, password, limit=5000):
         )
         
         if response.status_code == 200:
-            return response.json().get('result', [])
+            try:
+                json_data = response.json()
+                result = json_data.get('result', [])
+                if not isinstance(result, list):
+                    logger.error(f"User data result is not a list: {type(result)} - {result}")
+                    return []
+                logger.info(f"Successfully fetched {len(result)} user records")
+                return result
+            except (ValueError, KeyError) as e:
+                logger.error(f"Failed to parse user data JSON: {str(e)} - Response: {response.text[:500]}")
+                return []
         else:
-            logger.error(f"Failed to fetch user data: {response.status_code}")
+            logger.error(f"Failed to fetch user data: {response.status_code} - {response.text[:500]}")
             return []
             
     except Exception as e:
@@ -324,10 +354,98 @@ def fetch_user_data(instance_url, username, password, limit=5000):
 def analyze_cis_with_model(ci_data, audit_data, user_data):
     """Analyze CIs using the ML model and return stale CI list"""
     
+    # Validate data types before creating DataFrames
+    logger.info(f"Data validation - CI data type: {type(ci_data)}, length: {len(ci_data) if isinstance(ci_data, list) else 'N/A'}")
+    logger.info(f"Data validation - Audit data type: {type(audit_data)}, length: {len(audit_data) if isinstance(audit_data, list) else 'N/A'}")
+    logger.info(f"Data validation - User data type: {type(user_data)}, length: {len(user_data) if isinstance(user_data, list) else 'N/A'}")
+    
+    # Check if data is valid
+    if not isinstance(ci_data, list) or not ci_data:
+        logger.error(f"CI data is not a valid list: {type(ci_data)} - {ci_data}")
+        raise ValueError("CI data must be a non-empty list of dictionaries")
+        
+    if not isinstance(audit_data, list):
+        logger.error(f"Audit data is not a valid list: {type(audit_data)} - {audit_data}")
+        raise ValueError("Audit data must be a list of dictionaries")
+        
+    if not isinstance(user_data, list):
+        logger.error(f"User data is not a valid list: {type(user_data)} - {user_data}")
+        raise ValueError("User data must be a list of dictionaries")
+    
+    # Transform string items to dictionaries where needed
+    def transform_to_dict(data, data_type):
+        """Transform string items to dictionaries"""
+        transformed = []
+        for i, item in enumerate(data):
+            if isinstance(item, str):
+                logger.warning(f"{data_type} item {i} is a string, converting to dict: {item[:100]}...")
+                
+                # Try to parse as JSON first (in case it's a JSON string)
+                try:
+                    parsed_item = json.loads(item)
+                    if isinstance(parsed_item, dict):
+                        logger.info(f"Successfully parsed {data_type} item {i} as JSON")
+                        transformed.append(parsed_item)
+                        continue
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                
+                # If not JSON, create a basic dictionary structure for string data
+                transformed.append({
+                    'raw_data': item,
+                    'data_type': 'string_converted',
+                    'index': i,
+                    'original_length': len(item)
+                })
+            elif isinstance(item, dict):
+                transformed.append(item)
+            else:
+                logger.warning(f"{data_type} item {i} is unexpected type {type(item)}, converting to dict")
+                transformed.append({
+                    'raw_data': str(item),
+                    'data_type': f'{type(item).__name__}_converted',
+                    'index': i
+                })
+        return transformed
+    
+    # Transform data if needed
+    logger.info(f"Before transformation - CI: {len(ci_data)} items, Audit: {len(audit_data)} items, User: {len(user_data)} items")
+    
+    ci_data = transform_to_dict(ci_data, "CI")
+    audit_data = transform_to_dict(audit_data, "Audit") 
+    user_data = transform_to_dict(user_data, "User")
+    
+    logger.info(f"After transformation - CI: {len(ci_data)} items, Audit: {len(audit_data)} items, User: {len(user_data)} items")
+    
+    # Log sample of transformed data for debugging
+    if audit_data:
+        logger.info(f"Sample transformed audit data: {audit_data[0]}")
+        # Count how many were converted from strings
+        string_converted = sum(1 for item in audit_data if item.get('data_type') == 'string_converted')
+        if string_converted > 0:
+            logger.warning(f"Converted {string_converted} audit items from strings to dictionaries")
+    
     # Convert to pandas DataFrames
-    ci_df = pd.DataFrame(ci_data)
-    audit_df = pd.DataFrame(audit_data)
-    user_df = pd.DataFrame(user_data)
+    try:
+        ci_df = pd.DataFrame(ci_data)
+        logger.info(f"Created CI DataFrame with shape: {ci_df.shape}")
+    except Exception as e:
+        logger.error(f"Error creating CI DataFrame: {str(e)}")
+        raise ValueError(f"Failed to create CI DataFrame: {str(e)}")
+        
+    try:
+        audit_df = pd.DataFrame(audit_data)
+        logger.info(f"Created audit DataFrame with shape: {audit_df.shape}")
+    except Exception as e:
+        logger.error(f"Error creating audit DataFrame: {str(e)}")
+        raise ValueError(f"Failed to create audit DataFrame: {str(e)}")
+        
+    try:
+        user_df = pd.DataFrame(user_data)
+        logger.info(f"Created user DataFrame with shape: {user_df.shape}")
+    except Exception as e:
+        logger.error(f"Error creating user DataFrame: {str(e)}")
+        raise ValueError(f"Failed to create user DataFrame: {str(e)}")
     
     # Log a sample CI for debugging
     if len(ci_data) > 0:
@@ -448,8 +566,16 @@ def analyze_cis_with_model(ci_data, audit_data, user_data):
     
     # Convert dates in audit data
     if len(audit_df) > 0:
-        audit_df['sys_created_on'] = pd.to_datetime(audit_df['sys_created_on'], errors='coerce')
-        logger.info(f"Audit records date range: {audit_df['sys_created_on'].min()} to {audit_df['sys_created_on'].max()}")
+        # Check if we have real audit data or converted string data
+        if 'sys_created_on' in audit_df.columns:
+            audit_df['sys_created_on'] = pd.to_datetime(audit_df['sys_created_on'], errors='coerce')
+            logger.info(f"Audit records date range: {audit_df['sys_created_on'].min()} to {audit_df['sys_created_on'].max()}")
+        else:
+            logger.warning("Audit data appears to be converted from strings - missing expected columns")
+            # Check if we have any converted string data
+            converted_count = len(audit_df[audit_df['data_type'] == 'string_converted']) if 'data_type' in audit_df.columns else 0
+            if converted_count > 0:
+                logger.warning(f"Found {converted_count} audit records that were converted from strings")
     
     logger.info(f"Analyzing {len(labels_df)} CIs with assigned owners...")
     
