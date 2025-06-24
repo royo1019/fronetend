@@ -17,7 +17,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app, origins=['*'])  # Update this with your GitHub Pages URL in production
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+
+@app.route('/')
+def home():
+    return 'Flask App Deployed Successfully!'
 
 # Load the ML model
 MODEL_PATH = 'staleness_detector_model.pkl'
@@ -1067,6 +1072,9 @@ def undo_assignment():
         return jsonify({'error': error_msg}), 500
     finally:
         session.close()
+
+application = app
+
 
 if __name__ == '__main__':
     import os
