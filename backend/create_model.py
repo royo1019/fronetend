@@ -116,44 +116,439 @@ class RuleBasedStalenessDetector:
     def _define_scenario_patterns(self):
         """Define specific patterns from each scenario"""
         return {
-            'promotion_pattern': {
-                'indicators': [
-                    'title_change',
-                    'role_additions',
-                    'group_membership_change',
-                    'increased_activity_by_new_person',
-                    'zero_activity_by_old_owner'
-                ],
-                'scenarios': ['1', '23']
-            },
-            'onboarding_mismatch': {
-                'indicators': [
-                    'new_user_created',
-                    'assigned_to_manager',
-                    'actual_user_different',
-                    'daily_activities_by_actual_user'
-                ],
-                'scenarios': ['2', '9']
-            },
-            'reorganization': {
-                'indicators': [
-                    'new_group_created',
-                    'old_group_deactivated',
-                    'mass_user_transitions',
-                    'department_changes'
-                ],
-                'scenarios': ['3', '6', '13']
-            },
-            'external_to_internal': {
-                'indicators': [
-                    'contractor_account_deactivated',
-                    'new_internal_account_created',
-                    'vendor_prefix_in_old_account',
-                    'enhanced_permissions'
-                ],
-                'scenarios': ['4', '8']
+        # Promotion and Role Changes
+        'promotion_pattern': {
+            'indicators': [
+                'title_change_to_lead_or_manager',
+                'role_additions_with_elevated_privileges',
+                'group_membership_change_to_leadership',
+                'increased_activity_by_successor',
+                'zero_or_declining_activity_by_promoted_user',
+                'responsibility_inheritance_pattern',
+                'team_member_becomes_primary_admin'
+            ],
+            'scenarios': ['1', '23'],
+            'detection_queries': {
+                'title_change': "fieldname='title' AND newvalue LIKE '%Lead%' OR newvalue LIKE '%Manager%'",
+                'role_elevation': "tablename='sys_user_has_role' AND role IN ('team_lead', 'manager', 'admin')"
+            }
+        },
+        
+        'onboarding_mismatch': {
+            'indicators': [
+                'new_user_created_recently',
+                'ci_assigned_to_manager_initially',
+                'actual_user_different_from_assigned',
+                'daily_activities_by_actual_user',
+                'setup_activities_by_new_hire',
+                'password_changes_by_new_user',
+                'software_installations_by_new_user',
+                'no_activities_by_assigned_manager'
+            ],
+            'scenarios': ['2', '9', '16'],
+            'detection_queries': {
+                'new_hire': "user.hire_date > DATEADD(day, -90, GETDATE())",
+                'setup_pattern': "fieldname IN ('password', 'software_install', 'user_profile')"
+            }
+        },
+        
+        'department_reorganization': {
+            'indicators': [
+                'new_group_or_department_created',
+                'old_group_deactivated_or_renamed',
+                'mass_user_transitions_between_groups',
+                'department_field_changes_bulk',
+                'ci_group_assignments_updated',
+                'reporting_structure_changes',
+                'split_team_patterns',
+                'consolidated_team_patterns'
+            ],
+            'scenarios': ['3', '6', '13', '18'],
+            'detection_queries': {
+                'group_changes': "tablename='sys_user_group' AND active=false",
+                'bulk_transitions': "COUNT(DISTINCT user) > 5 AND fieldname='department'"
+            }
+        },
+        
+        'external_to_internal': {
+            'indicators': [
+                'contractor_account_deactivated',
+                'new_internal_account_created_same_person',
+                'vendor_prefix_in_old_account',
+                'contractor_suffix_removal',
+                'enhanced_permissions_granted',
+                'production_access_enabled',
+                'on_call_rotation_added',
+                'full_admin_rights_granted'
+            ],
+            'scenarios': ['4', '8', '15'],
+            'detection_queries': {
+                'contractor_pattern': "user_name LIKE '%.contractor' OR user_name LIKE 'vendor.%'",
+                'permission_upgrade': "role_changes FROM 'contractor' TO 'employee'"
+            }
+        },
+        
+        'manager_departure': {
+            'indicators': [
+                'manager_account_deactivated',
+                'terminated_employee_status',
+                'orphaned_ci_ownership',
+                'multiple_team_members_sharing_work',
+                'interim_manager_assigned',
+                'escalation_patterns_to_new_manager',
+                'distributed_responsibility_pattern',
+                'no_single_owner_identified'
+            ],
+            'scenarios': ['5'],
+            'detection_queries': {
+                'terminated_user': "user.active=false AND user.termination_date IS NOT NULL",
+                'orphaned_cis': "assigned_to IN (SELECT sys_id FROM sys_user WHERE active=false)"
+            }
+        },
+        
+        'project_team_dissolution': {
+            'indicators': [
+                'project_completion_status',
+                'team_disbanded_date_set',
+                'members_reassigned_to_new_teams',
+                'ci_repurposed_for_new_function',
+                'project_specific_access_removed',
+                'new_business_purpose_assigned',
+                'configuration_changes_for_new_use',
+                'ownership_transfer_to_permanent_team'
+            ],
+            'scenarios': ['6'],
+            'detection_queries': {
+                'disbanded_team': "group.active=false AND group.type='project'",
+                'repurposed_ci': "fieldname='business_purpose' AND oldvalue LIKE '%project%'"
+            }
+        },
+        
+        'cross_training_transition': {
+            'indicators': [
+                'user_from_different_team_active',
+                'original_team_skill_shortage',
+                'cross_functional_activities',
+                'dual_team_membership',
+                'gradual_responsibility_shift',
+                'original_team_reduced_activity',
+                'new_skill_certifications_added',
+                'permanent_role_reassignment'
+            ],
+            'scenarios': ['7'],
+            'detection_queries': {
+                'cross_team_activity': "user.primary_group != ci.support_group",
+                'dual_membership': "COUNT(DISTINCT group_membership) > 1"
+            }
+        },
+        
+        'vendor_to_inhouse': {
+            'indicators': [
+                'vendor_contract_end_date_reached',
+                'external_account_deactivation',
+                'internal_team_takeover',
+                'knowledge_transfer_activities',
+                'documentation_updates_by_internal',
+                'monitoring_tool_migrations',
+                'security_policy_implementations',
+                'vendor_specific_access_removal'
+            ],
+            'scenarios': ['8', '15'],
+            'detection_queries': {
+                'vendor_transition': "user_name LIKE 'vendor.%' AND active=false",
+                'internal_takeover': "new_owner.company = 'internal' AND timestamp > vendor.end_date"
+            }
+        },
+        
+        'intern_conversion': {
+            'indicators': [
+                'intern_account_upgraded',
+                'intern_suffix_removed',
+                'full_time_employee_record_created',
+                'enhanced_access_privileges',
+                'production_permissions_granted',
+                'mentor_supervision_removed',
+                'independent_work_assignments',
+                'permanent_team_membership'
+            ],
+            'scenarios': ['9', '16'],
+            'detection_queries': {
+                'intern_pattern': "user_name LIKE '%.intern' OR user_group = 'interns'",
+                'conversion': "new_user.employee_type = 'FTE' AND old_user.employee_type = 'intern'"
+            }
+        },
+        
+        'merger_acquisition': {
+            'indicators': [
+                'acquired_company_suffix_present',
+                'account_migration_pending',
+                'dual_identity_period',
+                'system_integration_activities',
+                'policy_alignment_changes',
+                'new_corporate_standards_applied',
+                'legacy_system_decommission',
+                'unified_platform_migration'
+            ],
+            'scenarios': ['10', '17'],
+            'detection_queries': {
+                'acquired_pattern': "user_name LIKE '%.xyz' OR user_name LIKE '%.acquired'",
+                'integration': "company_transition FROM 'acquired_company' TO 'parent_company'"
+            }
+        },
+        
+        'sabbatical_coverage': {
+            'indicators': [
+                'extended_leave_status_active',
+                'leave_start_date_recorded',
+                'temporary_coverage_assigned',
+                'coverage_becoming_permanent',
+                'original_owner_inactive_extended',
+                'role_specialization_change',
+                'focus_area_narrowed',
+                'responsibilities_redistributed'
+            ],
+            'scenarios': ['11', '12'],
+            'detection_queries': {
+                'leave_status': "user.leave_status = 'sabbatical' OR user.leave_status = 'medical'",
+                'extended_coverage': "coverage_duration > 90 AND coverage_type = 'temporary'"
+            }
+        },
+        
+        'emergency_coverage_permanent': {
+            'indicators': [
+                'emergency_assignment_initial',
+                'medical_leave_extended',
+                'temporary_becomes_permanent',
+                'coverage_user_primary_activities',
+                'strategic_planning_by_coverage',
+                'team_training_by_coverage',
+                'long_term_projects_assigned',
+                'original_owner_return_unlikely'
+            ],
+            'scenarios': ['12'],
+            'detection_queries': {
+                'medical_leave': "user.leave_type = 'medical' AND leave_duration > 60",
+                'permanent_takeover': "coverage_status CHANGED FROM 'temporary' TO 'permanent'"
+            }
+        },
+        
+        'agile_transformation': {
+            'indicators': [
+                'team_structure_flattened',
+                'product_based_organization',
+                'cross_functional_responsibilities',
+                'technology_silos_removed',
+                'full_stack_ownership',
+                'frontend_backend_merged',
+                'devops_practices_adopted',
+                'shared_team_ownership'
+            ],
+            'scenarios': ['13', '19'],
+            'detection_queries': {
+                'agile_transition': "team.methodology CHANGED TO 'agile'",
+                'product_teams': "team.type = 'product' AND team.structure = 'cross-functional'"
+            }
+        },
+        
+        'compliance_specialization': {
+            'indicators': [
+                'compliance_role_added',
+                'security_certifications_obtained',
+                'legal_it_transfer',
+                'audit_responsibilities_assigned',
+                'regulatory_tool_access',
+                'compliance_monitoring_setup',
+                'policy_enforcement_activities',
+                'risk_assessment_ownership'
+            ],
+            'scenarios': ['14'],
+            'detection_queries': {
+                'compliance_role': "role_additions INCLUDE 'compliance_officer'",
+                'legal_transfer': "previous_owner.department = 'legal' AND new_owner.department = 'security'"
+            }
+        },
+        
+        'graduate_program_completion': {
+            'indicators': [
+                'rotation_program_ended',
+                'permanent_assignment_made',
+                'trainee_status_removed',
+                'full_responsibilities_granted',
+                'mentor_assignment_ended',
+                'independent_project_ownership',
+                'team_integration_complete',
+                'specialization_area_chosen'
+            ],
+            'scenarios': ['16'],
+            'detection_queries': {
+                'graduate_completion': "user.program = 'graduate_trainee' AND program_end_date < NOW()",
+                'permanent_role': "user_type CHANGED FROM 'trainee' TO 'permanent'"
+            }
+        },
+        
+        'founder_integration': {
+            'indicators': [
+                'founder_title_present',
+                'executive_role_assigned',
+                'startup_acquisition_complete',
+                'corporate_integration_activities',
+                'strategic_initiatives_led',
+                'innovation_lab_creation',
+                'new_technology_adoption',
+                'cultural_transformation_activities'
+            ],
+            'scenarios': ['17'],
+            'detection_queries': {
+                'founder_pattern': "user.title LIKE '%founder%' OR user.title LIKE '%CEO%'",
+                'acquisition': "company_acquired = true AND user.role = 'executive'"
+            }
+        },
+        
+        'regional_consolidation': {
+            'indicators': [
+                'multiple_regions_managed',
+                'shared_service_center_created',
+                'regional_boundaries_removed',
+                'centralized_management_adopted',
+                'standardization_activities',
+                'cross_regional_access_granted',
+                'unified_procedures_implemented',
+                'regional_silos_eliminated'
+            ],
+            'scenarios': ['18'],
+            'detection_queries': {
+                'multi_region': "COUNT(DISTINCT location) > 1 GROUP BY user",
+                'shared_service': "team.type = 'shared_service_center'"
+            }
+        },
+        
+        'devops_transformation': {
+            'indicators': [
+                'infrastructure_as_code_adopted',
+                'automation_tools_implemented',
+                'ci_cd_pipeline_ownership',
+                'traditional_ops_deprecated',
+                'developer_operations_merged',
+                'deployment_automation_increased',
+                'configuration_management_automated',
+                'monitoring_integrated'
+            ],
+            'scenarios': ['19'],
+            'detection_queries': {
+                'devops_adoption': "tools INCLUDE ('terraform', 'ansible', 'jenkins')",
+                'automation': "manual_changes DECREASED BY 80%"
+            }
+        },
+        
+        'remote_work_assignment': {
+            'indicators': [
+                'equipment_pool_checkout',
+                'home_office_location_set',
+                'remote_access_configured',
+                'individual_device_assignment',
+                'vpn_access_granted',
+                'remote_support_enabled',
+                'home_network_configured',
+                'personal_admin_rights_granted'
+            ],
+            'scenarios': ['20'],
+            'detection_queries': {
+                'remote_assignment': "location CHANGED TO 'remote' OR location LIKE '%home%'",
+                'equipment_checkout': "ci.previous_location = 'equipment_pool'"
+            }
+        },
+        
+        'emergency_response_formation': {
+            'indicators': [
+                'incident_response_team_created',
+                'critical_infrastructure_assigned',
+                '24x7_coverage_implemented',
+                'emergency_procedures_activated',
+                'rapid_response_capabilities',
+                'security_clearance_elevated',
+                'crisis_management_tools_access',
+                'priority_escalation_rights'
+            ],
+            'scenarios': ['21'],
+            'detection_queries': {
+                'emergency_team': "team.type = 'emergency_response' AND priority = 'critical'",
+                'always_on': "support_hours = '24x7'"
+            }
+        },
+        
+        'ml_specialization': {
+            'indicators': [
+                'gpu_infrastructure_assigned',
+                'ml_frameworks_installed',
+                'research_computing_transfer',
+                'specialized_hardware_access',
+                'data_science_tools_configured',
+                'model_training_activities',
+                'compute_cluster_management',
+                'ai_platform_ownership'
+            ],
+            'scenarios': ['22'],
+            'detection_queries': {
+                'ml_infrastructure': "ci.type INCLUDE ('gpu', 'ml_server', 'compute_cluster')",
+                'specialization': "user.skills ADDED 'machine_learning'"
+            }
+        },
+        
+        'qa_lead_promotion': {
+            'indicators': [
+                'qa_analyst_to_lead_promotion',
+                'test_environment_inheritance',
+                'team_supervision_added',
+                'strategic_planning_responsibilities',
+                'automation_framework_ownership',
+                'quality_gate_management',
+                'ci_cd_integration_ownership',
+                'cross_team_coordination'
+            ],
+            'scenarios': ['23'],
+            'detection_queries': {
+                'qa_promotion': "title CHANGED FROM 'QA Analyst' TO 'QA Lead'",
+                'leadership': "direct_reports > 0"
+            }
+        },
+        
+        'dr_specialization': {
+            'indicators': [
+                'disaster_recovery_focus',
+                'backup_infrastructure_assigned',
+                'dr_site_management',
+                'recovery_testing_ownership',
+                'backup_optimization_activities',
+                'rto_rpo_management',
+                'dr_documentation_ownership',
+                'failover_procedure_control'
+            ],
+            'scenarios': ['24'],
+            'detection_queries': {
+                'dr_assignment': "ci.type INCLUDE ('backup', 'dr', 'recovery')",
+                'specialization': "user.certifications ADDED 'disaster_recovery'"
+            }
+        },
+        
+        'customer_platform_migration': {
+            'indicators': [
+                'customer_facing_systems_assigned',
+                'platform_migration_leadership',
+                'customer_success_integration',
+                'web_team_handover',
+                'customer_portal_ownership',
+                'experience_optimization_focus',
+                'customer_data_management',
+                'success_metrics_ownership'
+            ],
+            'scenarios': ['25'],
+            'detection_queries': {
+                'customer_platform': "ci.purpose INCLUDE 'customer' AND platform_migration = true",
+                'team_change': "team CHANGED FROM 'web_development' TO 'customer_success'"
             }
         }
+    }
+
 
     def predict_single(self, ci_data: Dict) -> Dict:
         """
