@@ -3,9 +3,51 @@ import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, B
 import { Listbox } from '@headlessui/react';
 import config from './config.js';
 
+// Error Boundary Component
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('Error caught by boundary:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6 max-w-md">
+            <div className="flex items-center space-x-3 mb-4">
+              <AlertCircle className="w-6 h-6 text-red-400" />
+              <h3 className="text-lg font-semibold text-red-300">Something went wrong</h3>
+            </div>
+            <p className="text-red-200 text-sm mb-4">
+              An error occurred while rendering the grouped view. Please try refreshing the page or switching to a different view.
+            </p>
+            <button
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-300 rounded-lg transition-colors"
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 // Aceternity UI Components
 
-// Background Beams Component
+// Background Beams Component with Glowing Stars
 const BackgroundBeams = () => {
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -32,14 +74,107 @@ const BackgroundBeams = () => {
             <stop offset="0%" stopColor="#8B5CF6" stopOpacity="1" />
             <stop offset="100%" stopColor="#3B82F6" stopOpacity="0" />
           </radialGradient>
+          {/* Star glow effects */}
+          <filter id="starGlow">
+            <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+            <feMerge> 
+              <feMergeNode in="coloredBlur"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+          <filter id="smallStarGlow">
+            <feGaussianBlur stdDeviation="1" result="coloredBlur"/>
+            <feMerge> 
+              <feMergeNode in="coloredBlur"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
         </defs>
         <rect width="100%" height="100%" fill="url(#beams)" />
+        
+        {/* Animated beam circles */}
         <g className="animate-pulse">
           <circle cx="20%" cy="20%" r="2" fill="#8B5CF6" opacity="0.6" />
           <circle cx="80%" cy="30%" r="1.5" fill="#3B82F6" opacity="0.4" />
           <circle cx="40%" cy="70%" r="1" fill="#06B6D4" opacity="0.8" />
           <circle cx="90%" cy="80%" r="2.5" fill="#8B5CF6" opacity="0.3" />
           <circle cx="10%" cy="90%" r="1.5" fill="#3B82F6" opacity="0.5" />
+        </g>
+        
+        {/* Glowing stars */}
+        <g>
+          {/* Large glowing stars */}
+          <circle cx="15%" cy="15%" r="1" fill="#ffffff" opacity="0.9" filter="url(#starGlow)" className="animate-pulse" style={{ animationDuration: '3s', animationDelay: '0s' }} />
+          <circle cx="85%" cy="25%" r="1" fill="#e0e7ff" opacity="0.8" filter="url(#starGlow)" className="animate-pulse" style={{ animationDuration: '4s', animationDelay: '1s' }} />
+          <circle cx="25%" cy="45%" r="1" fill="#ddd6fe" opacity="0.7" filter="url(#starGlow)" className="animate-pulse" style={{ animationDuration: '3.5s', animationDelay: '2s' }} />
+          <circle cx="70%" cy="55%" r="1" fill="#bfdbfe" opacity="0.9" filter="url(#starGlow)" className="animate-pulse" style={{ animationDuration: '2.8s', animationDelay: '0.5s' }} />
+          <circle cx="10%" cy="75%" r="1" fill="#ffffff" opacity="0.8" filter="url(#starGlow)" className="animate-pulse" style={{ animationDuration: '3.2s', animationDelay: '1.5s' }} />
+          <circle cx="90%" cy="85%" r="1" fill="#e0e7ff" opacity="0.6" filter="url(#starGlow)" className="animate-pulse" style={{ animationDuration: '4.2s', animationDelay: '2.5s' }} />
+          <circle cx="55%" cy="12%" r="1" fill="#ffffff" opacity="0.7" filter="url(#starGlow)" className="animate-pulse" style={{ animationDuration: '3.8s', animationDelay: '1.8s' }} />
+          <circle cx="8%" cy="40%" r="1" fill="#ddd6fe" opacity="0.8" filter="url(#starGlow)" className="animate-pulse" style={{ animationDuration: '2.9s', animationDelay: '3.2s' }} />
+          <circle cx="92%" cy="65%" r="1" fill="#bfdbfe" opacity="0.6" filter="url(#starGlow)" className="animate-pulse" style={{ animationDuration: '3.7s', animationDelay: '0.8s' }} />
+          <circle cx="42%" cy="88%" r="1" fill="#ffffff" opacity="0.9" filter="url(#starGlow)" className="animate-pulse" style={{ animationDuration: '4.1s', animationDelay: '2.2s' }} />
+          
+          {/* Medium glowing stars */}
+          <circle cx="35%" cy="20%" r="0.5" fill="#ffffff" opacity="0.7" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.5s', animationDelay: '0.8s' }} />
+          <circle cx="65%" cy="35%" r="0.5" fill="#e0e7ff" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.8s', animationDelay: '1.2s' }} />
+          <circle cx="50%" cy="60%" r="0.5" fill="#ddd6fe" opacity="0.8" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.2s', animationDelay: '2.8s' }} />
+          <circle cx="20%" cy="80%" r="0.5" fill="#bfdbfe" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.5s', animationDelay: '0.3s' }} />
+          <circle cx="80%" cy="70%" r="0.5" fill="#ffffff" opacity="0.7" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.8s', animationDelay: '1.8s' }} />
+          <circle cx="12%" cy="28%" r="0.5" fill="#e0e7ff" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.2s', animationDelay: '2.1s' }} />
+          <circle cx="88%" cy="42%" r="0.5" fill="#ddd6fe" opacity="0.7" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.7s', animationDelay: '0.9s' }} />
+          <circle cx="38%" cy="72%" r="0.5" fill="#bfdbfe" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.4s', animationDelay: '1.6s' }} />
+          <circle cx="72%" cy="18%" r="0.5" fill="#ffffff" opacity="0.8" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.6s', animationDelay: '2.7s' }} />
+          <circle cx="28%" cy="92%" r="0.5" fill="#e0e7ff" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.9s', animationDelay: '0.4s' }} />
+          <circle cx="58%" cy="38%" r="0.5" fill="#ddd6fe" opacity="0.7" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.4s', animationDelay: '3.1s' }} />
+          <circle cx="18%" cy="58%" r="0.5" fill="#bfdbfe" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.6s', animationDelay: '1.3s' }} />
+          <circle cx="82%" cy="28%" r="0.5" fill="#ffffff" opacity="0.8" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.3s', animationDelay: '2.4s' }} />
+          <circle cx="48%" cy="78%" r="0.5" fill="#e0e7ff" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.7s', animationDelay: '0.7s' }} />
+          <circle cx="68%" cy="8%" r="0.5" fill="#ddd6fe" opacity="0.7" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.9s', animationDelay: '1.9s' }} />
+          
+          {/* Small twinkling stars */}
+          <circle cx="5%" cy="35%" r="0.3" fill="#ffffff" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2s', animationDelay: '0.2s' }} />
+          <circle cx="95%" cy="45%" r="0.3" fill="#e0e7ff" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.7s', animationDelay: '1.1s' }} />
+          <circle cx="45%" cy="25%" r="0.3" fill="#ddd6fe" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.3s', animationDelay: '2.2s' }} />
+          <circle cx="75%" cy="15%" r="0.3" fill="#bfdbfe" opacity="0.3" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.1s', animationDelay: '0.7s' }} />
+          <circle cx="30%" cy="85%" r="0.3" fill="#ffffff" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.4s', animationDelay: '1.6s' }} />
+          <circle cx="60%" cy="90%" r="0.3" fill="#e0e7ff" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.9s', animationDelay: '2.9s' }} />
+          <circle cx="15%" cy="50%" r="0.3" fill="#ddd6fe" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.1s', animationDelay: '0.9s' }} />
+          <circle cx="85%" cy="60%" r="0.3" fill="#bfdbfe" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.3s', animationDelay: '2.1s' }} />
+          <circle cx="22%" cy="12%" r="0.3" fill="#ffffff" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.6s', animationDelay: '0.5s' }} />
+          <circle cx="78%" cy="32%" r="0.3" fill="#e0e7ff" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.2s', animationDelay: '1.4s' }} />
+          <circle cx="32%" cy="52%" r="0.3" fill="#ddd6fe" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.8s', animationDelay: '2.6s' }} />
+          <circle cx="88%" cy="72%" r="0.3" fill="#bfdbfe" opacity="0.3" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.2s', animationDelay: '0.1s' }} />
+          <circle cx="12%" cy="92%" r="0.3" fill="#ffffff" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.5s', animationDelay: '1.7s' }} />
+          <circle cx="68%" cy="22%" r="0.3" fill="#e0e7ff" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.1s', animationDelay: '3.0s' }} />
+          <circle cx="38%" cy="42%" r="0.3" fill="#ddd6fe" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.7s', animationDelay: '0.6s' }} />
+          <circle cx="92%" cy="8%" r="0.3" fill="#bfdbfe" opacity="0.3" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.4s', animationDelay: '2.3s' }} />
+          <circle cx="8%" cy="62%" r="0.3" fill="#ffffff" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.3s', animationDelay: '1.0s' }} />
+          <circle cx="52%" cy="82%" r="0.3" fill="#e0e7ff" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.9s', animationDelay: '2.8s' }} />
+          <circle cx="62%" cy="48%" r="0.3" fill="#ddd6fe" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.4s', animationDelay: '0.3s' }} />
+          <circle cx="18%" cy="18%" r="0.3" fill="#bfdbfe" opacity="0.3" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.1s', animationDelay: '1.5s' }} />
+          <circle cx="82%" cy="88%" r="0.3" fill="#ffffff" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.6s', animationDelay: '2.7s' }} />
+          <circle cx="42%" cy="68%" r="0.3" fill="#e0e7ff" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.2s', animationDelay: '0.8s' }} />
+          <circle cx="72%" cy="38%" r="0.3" fill="#ddd6fe" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.8s', animationDelay: '2.0s' }} />
+          <circle cx="28%" cy="28%" r="0.3" fill="#bfdbfe" opacity="0.3" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.3s', animationDelay: '1.2s' }} />
+          <circle cx="88%" cy="18%" r="0.3" fill="#ffffff" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.5s', animationDelay: '2.5s' }} />
+          <circle cx="48%" cy="58%" r="0.3" fill="#e0e7ff" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.1s', animationDelay: '0.4s' }} />
+          <circle cx="8%" cy="78%" r="0.3" fill="#ddd6fe" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.7s', animationDelay: '1.8s' }} />
+          <circle cx="58%" cy="18%" r="0.3" fill="#bfdbfe" opacity="0.3" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.0s', animationDelay: '2.4s' }} />
+          <circle cx="78%" cy="78%" r="0.3" fill="#ffffff" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.4s', animationDelay: '0.9s' }} />
+          <circle cx="38%" cy="8%" r="0.3" fill="#e0e7ff" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.8s', animationDelay: '1.7s' }} />
+          <circle cx="98%" cy="28%" r="0.3" fill="#ddd6fe" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.3s', animationDelay: '2.9s' }} />
+          <circle cx="2%" cy="48%" r="0.3" fill="#bfdbfe" opacity="0.3" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.2s', animationDelay: '0.2s' }} />
+          <circle cx="52%" cy="28%" r="0.3" fill="#ffffff" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.6s', animationDelay: '1.3s' }} />
+          <circle cx="72%" cy="68%" r="0.3" fill="#e0e7ff" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.2s', animationDelay: '2.6s' }} />
+          <circle cx="22%" cy="38%" r="0.3" fill="#ddd6fe" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.9s', animationDelay: '0.7s' }} />
+          <circle cx="92%" cy="48%" r="0.3" fill="#bfdbfe" opacity="0.3" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.1s', animationDelay: '1.9s' }} />
+          <circle cx="12%" cy="68%" r="0.3" fill="#ffffff" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.5s', animationDelay: '2.8s' }} />
+          <circle cx="62%" cy="8%" r="0.3" fill="#e0e7ff" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.1s', animationDelay: '0.6s' }} />
+          <circle cx="82%" cy="58%" r="0.3" fill="#ddd6fe" opacity="0.6" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.7s', animationDelay: '1.4s' }} />
+          <circle cx="42%" cy="18%" r="0.3" fill="#bfdbfe" opacity="0.3" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '3.3s', animationDelay: '2.2s' }} />
+          <circle cx="2%" cy="88%" r="0.3" fill="#ffffff" opacity="0.5" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.4s', animationDelay: '0.1s' }} />
+          <circle cx="98%" cy="68%" r="0.3" fill="#e0e7ff" opacity="0.4" filter="url(#smallStarGlow)" className="animate-pulse" style={{ animationDuration: '2.8s', animationDelay: '1.6s' }} />
         </g>
       </svg>
     </div>
@@ -138,7 +273,14 @@ const Input = ({ className = "", type = "text", ...props }) => {
   return (
     <input
       type={type}
-      className={`flex h-10 w-full rounded-md border border-white/20 bg-black/20 backdrop-blur-sm px-3 py-2 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-black disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200 ${className}`}
+      className={`flex h-10 w-full rounded-md border border-white/20 bg-black/30 backdrop-blur-sm px-3 py-2 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-black disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200 ${className}`}
+      style={{
+        backgroundColor: 'rgba(0, 0, 0, 0.3)',
+        color: 'white',
+        WebkitTextFillColor: 'white',
+        WebkitBoxShadow: '0 0 0 1000px rgba(0, 0, 0, 0.3) inset',
+        WebkitBackgroundClip: 'text'
+      }}
       {...props}
     />
   );
@@ -176,6 +318,32 @@ const ServiceNowScanner = () => {
   const [assignmentHistory, setAssignmentHistory] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [undoingAssignment, setUndoingAssignment] = useState(null);
+  const [showScrollButtons, setShowScrollButtons] = useState(false);
+
+  // Scroll functionality
+  useEffect(() => {
+    const handleScroll = () => {
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      setShowScrollButtons(scrollTop > 300);
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  const scrollToTop = () => {
+    window.scrollTo({
+      top: 0,
+      behavior: 'smooth'
+    });
+  };
+
+  const scrollToBottom = () => {
+    window.scrollTo({
+      top: document.documentElement.scrollHeight,
+      behavior: 'smooth'
+    });
+  };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -268,12 +436,24 @@ const ServiceNowScanner = () => {
       if (response.ok) {
         const results = await response.json();
         setScanResults(results);
+        // Scroll to top after scan completion
+        setTimeout(() => {
+          scrollToTop();
+        }, 100);
       } else {
         const error = await response.json();
         setScanResults({ error: error.error || 'Scan failed. Please try again.' });
+        // Scroll to top even on error
+        setTimeout(() => {
+          scrollToTop();
+        }, 100);
       }
     } catch (error) {
       setScanResults({ error: 'Network error during scan. Please try again.' });
+      // Scroll to top on network error
+      setTimeout(() => {
+        scrollToTop();
+      }, 100);
     } finally {
       setIsScanning(false);
     }
@@ -407,64 +587,103 @@ const ServiceNowScanner = () => {
 
   // Get recommended owners statistics for high risk and critical CIs
   const getRecommendedOwnersStats = () => {
-    if (!scanResults || !scanResults.stale_cis || !Array.isArray(scanResults.stale_cis)) return [];
-    
-    const highRiskCIs = scanResults.stale_cis.filter(ci => 
-      ci.risk_level === 'Critical' || ci.risk_level === 'High'
-    );
-    
-    const ownerStats = {};
-    
-    highRiskCIs.forEach(ci => {
-      if (ci.recommended_owners && ci.recommended_owners.length > 0) {
-        const primaryOwner = ci.recommended_owners[0];
-        const mappedOwner = mapSystemToAdmin(primaryOwner.username, primaryOwner.display_name);
-        const key = mappedOwner.username;
-        
-        if (!ownerStats[key]) {
-          ownerStats[key] = {
-            username: mappedOwner.username,
-            display_name: mappedOwner.display_name,
-            total_cis: 0,
-            critical_count: 0,
-            high_count: 0,
-            avg_confidence: 0,
-            confidences: []
-          };
-        }
-        
-        ownerStats[key].total_cis++;
-        ownerStats[key].confidences.push(ci.confidence || 0);
-        
-        if (ci.risk_level === 'Critical') {
-          ownerStats[key].critical_count++;
-        } else if (ci.risk_level === 'High') {
-          ownerStats[key].high_count++;
-        }
+    try {
+      if (!scanResults || !scanResults.stale_cis || !Array.isArray(scanResults.stale_cis)) {
+        console.log('No scan results available for owner stats');
+        return [];
       }
-    });
-    
-    // Calculate average confidence and sort by total CIs
-    return Object.values(ownerStats)
-      .map(owner => ({
-        ...owner,
-        avg_confidence: owner.confidences.length > 0 
-          ? (owner.confidences.reduce((sum, conf) => sum + conf, 0) / owner.confidences.length)
-          : 0
-      }))
-      .sort((a, b) => b.total_cis - a.total_cis);
+      
+      const highRiskCIs = scanResults.stale_cis.filter(ci => 
+        ci && (ci.risk_level === 'Critical' || ci.risk_level === 'High')
+      );
+      
+      console.log('High risk CIs for owner stats:', highRiskCIs.length);
+      
+      const ownerStats = {};
+      
+      highRiskCIs.forEach(ci => {
+        try {
+          if (ci.recommended_owners && Array.isArray(ci.recommended_owners) && ci.recommended_owners.length > 0) {
+            const primaryOwner = ci.recommended_owners[0];
+            if (primaryOwner && primaryOwner.username) {
+              const mappedOwner = mapSystemToAdmin(primaryOwner.username, primaryOwner.display_name);
+              const key = mappedOwner.username;
+              
+              if (!ownerStats[key]) {
+                ownerStats[key] = {
+                  username: mappedOwner.username,
+                  display_name: mappedOwner.display_name,
+                  total_cis: 0,
+                  critical_count: 0,
+                  high_count: 0,
+                  avg_confidence: 0,
+                  confidences: []
+                };
+              }
+              
+              ownerStats[key].total_cis++;
+              ownerStats[key].confidences.push(ci.confidence || 0);
+              
+              if (ci.risk_level === 'Critical') {
+                ownerStats[key].critical_count++;
+              } else if (ci.risk_level === 'High') {
+                ownerStats[key].high_count++;
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error processing CI for owner stats:', ci, error);
+        }
+      });
+      
+      // Calculate average confidence and sort by total CIs
+      const result = Object.values(ownerStats)
+        .map(owner => ({
+          ...owner,
+          avg_confidence: owner.confidences.length > 0 
+            ? (owner.confidences.reduce((sum, conf) => sum + conf, 0) / owner.confidences.length)
+            : 0
+        }))
+        .sort((a, b) => b.total_cis - a.total_cis);
+        
+      console.log('Owner stats result:', result);
+      return result;
+    } catch (error) {
+      console.error('Error in getRecommendedOwnersStats:', error);
+      return [];
+    }
   };
 
   // Get CIs for a specific owner
   const getCIsForOwner = (ownerUsername) => {
-    if (!scanResults || !scanResults.stale_cis || !Array.isArray(scanResults.stale_cis)) return [];
-    
-    return scanResults.stale_cis.filter(ci => 
-      (ci.risk_level === 'Critical' || ci.risk_level === 'High') &&
-      ci.recommended_owners && 
-      ci.recommended_owners.length > 0 && 
-      mapSystemToAdmin(ci.recommended_owners[0].username, ci.recommended_owners[0].display_name).username === ownerUsername
-    );
+    try {
+      if (!scanResults || !scanResults.stale_cis || !Array.isArray(scanResults.stale_cis)) {
+        console.log('No scan results available for getCIsForOwner');
+        return [];
+      }
+      
+      const result = scanResults.stale_cis.filter(ci => {
+        try {
+          return ci && 
+            (ci.risk_level === 'Critical' || ci.risk_level === 'High') &&
+            ci.recommended_owners && 
+            Array.isArray(ci.recommended_owners) &&
+            ci.recommended_owners.length > 0 && 
+            ci.recommended_owners[0] &&
+            ci.recommended_owners[0].username &&
+            mapSystemToAdmin(ci.recommended_owners[0].username, ci.recommended_owners[0].display_name).username === ownerUsername;
+        } catch (error) {
+          console.error('Error filtering CI for owner:', ci, error);
+          return false;
+        }
+      });
+      
+      console.log(`Found ${result.length} CIs for owner ${ownerUsername}`);
+      return result;
+    } catch (error) {
+      console.error('Error in getCIsForOwner:', error);
+      return [];
+    }
   };
 
   // Toggle owner expansion
@@ -474,16 +693,32 @@ const ServiceNowScanner = () => {
 
   // Map system user to admin user
   const mapSystemToAdmin = (username, displayName) => {
-    if (username?.toLowerCase() === 'system') {
+    try {
+      if (!username) {
+        return {
+          username: 'unknown',
+          display_name: 'Unknown User'
+        };
+      }
+      
+      if (username.toLowerCase() === 'system') {
+        return {
+          username: 'admin',
+          display_name: 'System Administrator'
+        };
+      }
+      
       return {
-        username: 'admin',
-        display_name: 'System Administrator'
+        username: username,
+        display_name: displayName || username
+      };
+    } catch (error) {
+      console.error('Error in mapSystemToAdmin:', error);
+      return {
+        username: 'unknown',
+        display_name: 'Unknown User'
       };
     }
-    return {
-      username: username,
-      display_name: displayName
-    };
   };
 
   const goToPage = (page) => {
@@ -1080,6 +1315,7 @@ const ServiceNowScanner = () => {
 
                         {/* Owner Selection Interface */}
                         {activeFilter === 'by-owner' && scanResults && scanResults.stale_cis && getRecommendedOwnersStats().length > 0 && (
+                          <ErrorBoundary>
                           <div className="p-6 border-b border-white/10 bg-white/2">
                             <div className="mb-4">
                               <h4 className="text-lg font-semibold text-white mb-2">Select Recommended Owner</h4>
@@ -1141,75 +1377,157 @@ const ServiceNowScanner = () => {
                                         </div>
                                         <div className="space-y-3">
                                           {getCIsForOwner(owner.username).map((ci) => (
-                                            <div key={ci.ci_id} className="bg-white/5 p-3 rounded-lg border border-white/10">
-                                              <div className="flex items-center justify-between mb-2">
-                                                <div className="flex items-center space-x-3">
-                                                  <div className="font-medium text-white text-sm">{ci.ci_name}</div>
-                                                  <span className={`px-2 py-1 text-xs rounded ${getRiskColor(ci.risk_level)}`}>
-                                                    {ci.risk_level}
-                                                  </span>
-                                                </div>
-                                                <div className="text-right">
-                                                  <div className="text-green-400 font-semibold text-sm">{(ci.confidence * 100).toFixed(0)}%</div>
-                                                  <div className="text-xs text-gray-400">Confidence</div>
-                                                </div>
-                                              </div>
-                                              
-                                              <div className="text-xs text-gray-400 mb-2">
-                                                <span className="font-medium">Class:</span> {ci.ci_class} • 
-                                                <span className="font-medium ml-2">Current Owner:</span> {ci.current_owner}
-                                              </div>
-                                              
-                                              {/* Assign Button */}
-                                              <div className="mt-3 pt-3 border-t border-white/10">
-                                                {assignmentResults[ci.ci_id] ? (
-                                                  <div className={`text-center p-2 rounded-lg ${
-                                                    assignmentResults[ci.ci_id].success 
-                                                      ? 'bg-green-500/20 text-green-400' 
-                                                      : 'bg-red-500/20 text-red-400'
-                                                  }`}>
-                                                    <div className="flex items-center justify-center space-x-2">
-                                                      {assignmentResults[ci.ci_id].success ? (
-                                                        <CheckCircle2 className="w-4 h-4" />
-                                                      ) : (
-                                                        <AlertCircle className="w-4 h-4" />
-                                                      )}
-                                                      <span className="text-sm font-medium">
-                                                        {assignmentResults[ci.ci_id].message}
-                                                      </span>
+                                            <div key={ci.ci_id} className="bg-white/5 rounded-lg border border-white/10 overflow-hidden">
+                                              {/* CI Header - Clickable */}
+                                              <div 
+                                                className="p-3 cursor-pointer transition-colors hover:bg-white/10"
+                                                onClick={() => toggleCIExpansion(ci.ci_id)}
+                                              >
+                                                <div className="flex items-center justify-between mb-2">
+                                                  <div className="flex items-center space-x-3">
+                                                    <div className="flex items-center">
+                                                      {expandedCI === ci.ci_id ? 
+                                                        <ChevronDown className="w-4 h-4 text-gray-400" /> : 
+                                                        <ChevronRight className="w-4 h-4 text-gray-400" />
+                                                      }
                                                     </div>
-                                                    <div className="text-xs mt-1 opacity-75">
-                                                      {assignmentResults[ci.ci_id].timestamp}
+                                                    <div className="font-medium text-white text-sm">{ci.ci_name}</div>
+                                                    <span className={`px-2 py-1 text-xs rounded ${getRiskColor(ci.risk_level)}`}>
+                                                      {ci.risk_level}
+                                                    </span>
+                                                  </div>
+                                                  <div className="text-right">
+                                                    <div className="text-green-400 font-semibold text-sm">{(ci.confidence * 100).toFixed(0)}%</div>
+                                                    <div className="text-xs text-gray-400">Confidence</div>
+                                                  </div>
+                                                </div>
+                                                
+                                                <div className="text-xs text-gray-400">
+                                                  <span className="font-medium">Class:</span> {ci.ci_class} • 
+                                                  <span className="font-medium ml-2">Current Owner:</span> {ci.current_owner}
+                                                </div>
+                                              </div>
+
+                                              {/* Expanded Details */}
+                                              {expandedCI === ci.ci_id && (
+                                                <div className="bg-white/2 p-4 border-t border-white/10">
+                                                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                                                    {/* Staleness Reasons */}
+                                                    <div>
+                                                      <h6 className="text-white font-semibold mb-2 flex items-center text-sm">
+                                                        <AlertTriangle className="w-4 h-4 mr-2 text-orange-400" />
+                                                        Why This CI is Stale
+                                                      </h6>
+                                                      <div className="space-y-2">
+                                                        {ci.staleness_reasons && ci.staleness_reasons.map((reason, reasonIdx) => (
+                                                          <div key={reasonIdx} className="bg-white/5 p-2 rounded-lg border border-white/10">
+                                                            <div className="flex items-center justify-between mb-1">
+                                                              <span className="text-purple-300 font-medium text-xs">
+                                                                {reason.rule_name && reason.rule_name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                                              </span>
+                                                              <span className="text-xs text-gray-400">
+                                                                {reason.confidence && (reason.confidence * 100).toFixed(0)}% confidence
+                                                              </span>
+                                                            </div>
+                                                            <p className="text-gray-300 text-xs">{reason.description}</p>
+                                                          </div>
+                                                        ))}
+                                                      </div>
+                                                    </div>
+
+                                                    {/* Recommended Owners */}
+                                                    <div>
+                                                      <h6 className="text-white font-semibold mb-2 flex items-center text-sm">
+                                                        <Users className="w-4 h-4 mr-2 text-green-400" />
+                                                        Recommended New Owners
+                                                      </h6>
+                                                      <div className="space-y-2">
+                                                        {ci.recommended_owners && ci.recommended_owners.slice(0, 2).map((rec, recIdx) => (
+                                                          <div key={recIdx} className="bg-white/5 p-2 rounded-lg border border-white/10">
+                                                            <div className="flex items-center justify-between mb-1">
+                                                              <span className="text-green-300 font-medium text-xs">
+                                                                {rec.display_name || rec.username}
+                                                              </span>
+                                                              <span className="text-green-400 font-semibold text-xs">
+                                                                {(rec.confidence * 100).toFixed(0)}%
+                                                              </span>
+                                                            </div>
+                                                            <div className="grid grid-cols-2 gap-2 text-xs text-gray-300">
+                                                              <div>
+                                                                <span className="text-gray-400">Activities: </span>
+                                                                <span className="text-green-300">{rec.activity_count || 0}</span>
+                                                              </div>
+                                                              <div>
+                                                                <span className="text-gray-400">Last Seen: </span>
+                                                                <span className="text-green-300">
+                                                                  {rec.days_since_activity === 999 ? 'Never' : `${rec.days_since_activity || 0}d ago`}
+                                                                </span>
+                                                              </div>
+                                                            </div>
+                                                            {rec.reason && (
+                                                              <div className="text-xs text-green-200 mt-1">
+                                                                <span className="text-gray-400">Why: </span>
+                                                                <span>{rec.reason}</span>
+                                                              </div>
+                                                            )}
+                                                          </div>
+                                                        ))}
+                                                      </div>
                                                     </div>
                                                   </div>
-                                                ) : (
-                                                  <button
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      const mappedOwner = mapSystemToAdmin(owner.username, owner.display_name);
-                                                      assignCIToOwner(ci.ci_id, mappedOwner.username, mappedOwner.display_name);
-                                                    }}
-                                                    disabled={assigningCIs.has(ci.ci_id)}
-                                                    className={`w-full flex items-center justify-center space-x-2 py-2 px-4 rounded-lg font-medium transition-all text-sm ${
-                                                      assigningCIs.has(ci.ci_id)
-                                                        ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                                                        : 'bg-gradient-to-r from-purple-500 to-blue-600 hover:from-purple-600 hover:to-blue-700 text-white hover:scale-105'
-                                                    }`}
-                                                  >
-                                                    {assigningCIs.has(ci.ci_id) ? (
-                                                      <>
-                                                        <Loader2 className="w-4 h-4 animate-spin" />
-                                                        <span>Assigning...</span>
-                                                      </>
+                                                  
+                                                  {/* Assign Button */}
+                                                  <div className="pt-3 border-t border-white/10">
+                                                    {assignmentResults[ci.ci_id] ? (
+                                                      <div className={`text-center p-2 rounded-lg ${
+                                                        assignmentResults[ci.ci_id].success 
+                                                          ? 'bg-green-500/20 text-green-400' 
+                                                          : 'bg-red-500/20 text-red-400'
+                                                      }`}>
+                                                        <div className="flex items-center justify-center space-x-2">
+                                                          {assignmentResults[ci.ci_id].success ? (
+                                                            <CheckCircle2 className="w-4 h-4" />
+                                                          ) : (
+                                                            <AlertCircle className="w-4 h-4" />
+                                                          )}
+                                                          <span className="text-sm font-medium">
+                                                            {assignmentResults[ci.ci_id].message}
+                                                          </span>
+                                                        </div>
+                                                        <div className="text-xs mt-1 opacity-75">
+                                                          {assignmentResults[ci.ci_id].timestamp}
+                                                        </div>
+                                                      </div>
                                                     ) : (
-                                                      <>
-                                                        <UserPlus className="w-4 h-4" />
-                                                        <span>Assign to {mapSystemToAdmin(owner.username, owner.display_name).display_name}</span>
-                                                      </>
+                                                      <button
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          const mappedOwner = mapSystemToAdmin(owner.username, owner.display_name);
+                                                          assignCIToOwner(ci.ci_id, mappedOwner.username, mappedOwner.display_name);
+                                                        }}
+                                                        disabled={assigningCIs.has(ci.ci_id)}
+                                                        className={`w-full flex items-center justify-center space-x-2 py-2 px-4 rounded-lg font-medium transition-all text-sm ${
+                                                          assigningCIs.has(ci.ci_id)
+                                                            ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                                            : 'bg-gradient-to-r from-purple-500 to-blue-600 hover:from-purple-600 hover:to-blue-700 text-white hover:scale-105'
+                                                        }`}
+                                                      >
+                                                        {assigningCIs.has(ci.ci_id) ? (
+                                                          <>
+                                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                                            <span>Assigning...</span>
+                                                          </>
+                                                        ) : (
+                                                          <>
+                                                            <UserPlus className="w-4 h-4" />
+                                                            <span>Assign to {mapSystemToAdmin(owner.username, owner.display_name).display_name}</span>
+                                                          </>
+                                                        )}
+                                                      </button>
                                                     )}
-                                                  </button>
-                                                )}
-                                              </div>
+                                                  </div>
+                                                </div>
+                                              )}
                                             </div>
                                           ))}
                                         </div>
@@ -1220,6 +1538,7 @@ const ServiceNowScanner = () => {
                               ))}
                             </div>
                           </div>
+                          </ErrorBoundary>
                         )}
 
                         {/* Search and Sort Controls */}
@@ -1666,7 +1985,7 @@ const ServiceNowScanner = () => {
                               </div>
                             ))}
                           </div>
-                        ) : (
+                        ) : activeFilter !== 'by-owner' && (
                           <div className="p-8 text-center">
                             <CheckCircle className="w-12 h-12 text-green-400 mx-auto mb-4" />
                             <p className="text-green-400 text-lg font-medium">No stale ownership detected!</p>
@@ -1868,15 +2187,7 @@ const ServiceNowScanner = () => {
             )}
           </div>
 
-          {/* Footer */}
-          <div className="text-center mt-12">
-            <div className="bg-white/5 backdrop-blur-sm rounded-xl p-6 border border-white/10 max-w-2xl mx-auto">
-              <p className="text-gray-300">
-                Powered by <span className="text-purple-400 font-semibold">advanced machine learning algorithms</span> • 
-                <span className="text-blue-400 font-semibold"> Real-time ServiceNow integration</span>
-              </p>
-            </div>
-          </div>
+
         </div>
       </div>
 
@@ -2017,6 +2328,29 @@ const ServiceNowScanner = () => {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Scroll Navigation Buttons */}
+      {showScrollButtons && (
+        <div className="fixed bottom-6 right-6 flex flex-col space-y-3 z-40">
+          {/* Scroll to Top Button */}
+          <button
+            onClick={scrollToTop}
+            className="group w-12 h-12 bg-gradient-to-r from-purple-500 to-blue-600 hover:from-purple-600 hover:to-blue-700 rounded-full shadow-lg hover:shadow-xl transition-all duration-300 flex items-center justify-center hover:scale-110"
+            title="Scroll to Top"
+          >
+            <ChevronUp className="w-5 h-5 text-white group-hover:scale-110 transition-transform" />
+          </button>
+          
+          {/* Scroll to Bottom Button */}
+          <button
+            onClick={scrollToBottom}
+            className="group w-12 h-12 bg-gradient-to-r from-blue-500 to-cyan-600 hover:from-blue-600 hover:to-cyan-700 rounded-full shadow-lg hover:shadow-xl transition-all duration-300 flex items-center justify-center hover:scale-110"
+            title="Scroll to Bottom"
+          >
+            <ChevronDown className="w-5 h-5 text-white group-hover:scale-110 transition-transform" />
+          </button>
         </div>
       )}
     </div>
