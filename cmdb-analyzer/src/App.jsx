@@ -273,7 +273,7 @@ const Input = ({ className = "", type = "text", ...props }) => {
   return (
     <input
       type={type}
-      className={`flex h-10 w-full rounded-md border border-white/20 bg-black/30 backdrop-blur-sm px-3 py-2 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-black disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200 ${className}`}
+      className={`flex h-10 w-full rounded-md border border-white/20 bg-black/30 backdrop-blur-sm px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-black disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200 ${className}`}
       style={{
         backgroundColor: 'rgba(0, 0, 0, 0.3)',
         color: 'white',
@@ -1038,7 +1038,6 @@ const ServiceNowScanner = () => {
                         name="instanceUrl"
                         value={formData.instanceUrl}
                         onChange={handleInputChange}
-                        placeholder="https://your-instance.service-now.com"
                         className="pl-10"
                       />
                     </div>
@@ -1053,7 +1052,6 @@ const ServiceNowScanner = () => {
                         name="username"
                         value={formData.username}
                         onChange={handleInputChange}
-                        placeholder="Enter username"
                         className="pl-10"
                       />
                     </div>
@@ -1070,7 +1068,6 @@ const ServiceNowScanner = () => {
                         name="password"
                         value={formData.password}
                         onChange={handleInputChange}
-                        placeholder="Enter password"
                         className="pl-10 pr-10"
                       />
                       <button
@@ -1603,20 +1600,7 @@ const ServiceNowScanner = () => {
                                   )}
                                 </button>
 
-                                {/* Toggle Assigned Section Button */}
                                 <div className="flex items-center space-x-2">
-                                  <button
-                                    onClick={() => setShowAssignedSection(!showAssignedSection)}
-                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center space-x-2 ${
-                                      showAssignedSection 
-                                        ? 'bg-gradient-to-r from-purple-500/20 to-blue-500/20 text-purple-300 border border-purple-500/30' 
-                                        : 'bg-white/10 text-gray-300 border border-white/20 hover:bg-gradient-to-r hover:from-purple-500/10 hover:to-blue-500/10 hover:text-purple-300'
-                                    }`}
-                                  >
-                                    <UserCheck className="w-4 h-4" />
-                                    <span>Assigned CIs ({assignedCIs.length})</span>
-                                  </button>
-
                                   <button
                                     onClick={() => {
                                       setShowAssignmentHistory(true);
@@ -2083,104 +2067,7 @@ const ServiceNowScanner = () => {
 
 
 
-                    {/* Assigned CIs Section */}
-                    {showAssignedSection && assignedCIs.length > 0 && (
-                      <CardContainer>
-                        <div className="overflow-hidden">
-                          <div className="p-6 border-b border-white/10">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <h3 className="text-2xl font-bold text-white flex items-center">
-                                  <CheckCircle2 className="w-6 h-6 mr-3 text-green-400" />
-                                  Successfully Assigned CIs
-                                </h3>
-                                <p className="text-gray-400 mt-2">CIs that have been successfully reassigned to new owners</p>
-                              </div>
-                              <div className="text-right">
-                                <div className="text-2xl font-bold text-green-400">{assignedCIs.length}</div>
-                                <div className="text-gray-400 text-sm">Assignments</div>
-                              </div>
-                            </div>
-                          </div>
-                          
-                          <div className="space-y-0">
-                            {assignedCIs.map((ci, idx) => (
-                              <div key={`assigned-${ci.ci_id}-${idx}`} className="border-b border-white/10 last:border-b-0">
-                                <div className="p-6 hover:bg-white/5 transition-colors">
-                                  <div className="flex items-center justify-between">
-                                    <div className="flex items-center space-x-4 flex-1">
-                                      <div className="flex items-center">
-                                        <CheckCircle2 className="w-5 h-5 text-green-400 mr-3" />
-                                        <div className="w-10 h-10 rounded-lg bg-gradient-to-r from-green-500 to-emerald-500 flex items-center justify-center">
-                                          <Database className="w-5 h-5 text-white" />
-                                        </div>
-                                      </div>
-                                      
-                                      <div className="flex-1">
-                                        <div className="flex items-center space-x-3 mb-2">
-                                          <h4 className="text-white font-semibold">{ci.ci_name}</h4>
-                                          <span className={`px-2 py-1 text-xs rounded border ${getRiskColor(ci.risk_level)}`}>
-                                            {ci.risk_level}
-                                          </span>
-                                        </div>
-                                        
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                                          <div>
-                                            <span className="text-gray-400">CI Class:</span>
-                                            <span className="text-white ml-2">{ci.ci_class}</span>
-                                          </div>
-                                          <div>
-                                            <span className="text-gray-400">Previous Owner:</span>
-                                            <span className="text-white ml-2">{ci.current_owner}</span>
-                                          </div>
-                                          <div>
-                                            <span className="text-gray-400">New Owner:</span>
-                                            <span className="text-green-400 ml-2 font-medium">{ci.assigned_to}</span>
-                                          </div>
-                                        </div>
-                                        
-                                        <div className="mt-3 flex items-center justify-between text-xs">
-                                          <div className="text-gray-400">
-                                            Assigned: {new Date(ci.assignment_timestamp).toLocaleString()}
-                                          </div>
-                                          <div className="text-green-400 bg-green-500/10 px-2 py-1 rounded">
-                                            ✓ {ci.assignment_message || 'Successfully assigned'}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </div>
-                                    
-                                    <div className="text-right ml-4">
-                                      <div className="text-lg font-bold text-green-400">{(ci.confidence * 100).toFixed(0)}%</div>
-                                      <div className="text-xs text-gray-400">Original Confidence</div>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                          
-                          {/* Clear Assigned CIs Button */}
-                          <div className="p-6 border-t border-white/10 bg-white/2">
-                            <div className="flex justify-between items-center">
-                              <div className="text-sm text-gray-400">
-                                Total: {assignedCIs.length} successfully assigned CIs
-                              </div>
-                              <button
-                                onClick={() => {
-                                  if (window.confirm('Clear all assigned CIs from this list? This will not affect the actual assignments in ServiceNow.')) {
-                                    setAssignedCIs([]);
-                                  }
-                                }}
-                                className="px-4 py-2 bg-gradient-to-r from-red-500/10 to-pink-500/10 hover:from-red-500/20 hover:to-pink-500/20 border border-red-500/30 text-red-300 hover:text-red-200 rounded-lg transition-all text-sm"
-                              >
-                                Clear List
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </CardContainer>
-                    )}
+
                   </>
                 )}
               </div>
