@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=['*'])  # Update this with your GitHub Pages URL in production
 
 # Load the ML model
 MODEL_PATH = 'staleness_detector_model.pkl'
@@ -1069,9 +1069,13 @@ def undo_assignment():
         session.close()
 
 if __name__ == '__main__':
+    import os
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('FLASK_ENV') == 'development'
+    
     print("Starting CMDB Analyzer Backend with ML Model...")
-    print("Backend will be available at: http://localhost:5000")
-    print("Health check: http://localhost:5000/health")
+    print(f"Backend will be available at: http://0.0.0.0:{port}")
+    print(f"Health check: http://0.0.0.0:{port}/health")
     print("Test connection: POST /test-connection")
     print("Scan for stale ownership: POST /scan-stale-ownership")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=debug, host='0.0.0.0', port=port)

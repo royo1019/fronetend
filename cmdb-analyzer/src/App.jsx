@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AlertCircle, CheckCircle, Loader2, Search, Server, User, Eye, EyeOff, Brain, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, Clock, Shield, Activity, UserCheck, Zap, Database, ChevronUp, ChevronLeft, MoreHorizontal, UserPlus, CheckCircle2, X, ArrowUp, ArrowDown, History, RotateCcw } from 'lucide-react';
 import { Listbox } from '@headlessui/react';
+import config from './config.js';
 
 // Aceternity UI Components
 
@@ -194,7 +195,7 @@ const ServiceNowScanner = () => {
     setConnectionStatus(null);
 
     try {
-      const response = await fetch('http://localhost:5000/test-connection', {
+      const response = await fetch(`${config.API_URL}/test-connection`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -249,7 +250,7 @@ const ServiceNowScanner = () => {
         });
       }, 1000);
 
-      const response = await fetch('http://localhost:5000/scan-stale-ownership', {
+      const response = await fetch(`${config.API_URL}/scan-stale-ownership`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -524,7 +525,7 @@ const ServiceNowScanner = () => {
     setAssigningCIs(newAssigning);
 
     try {
-      const response = await fetch('http://localhost:5000/assign-ci-owner', {
+      const response = await fetch(`${config.API_URL}/assign-ci-owner`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -616,7 +617,7 @@ const ServiceNowScanner = () => {
 
     setIsLoadingHistory(true);
     try {
-      const response = await fetch('http://localhost:5000/assignment-history');
+      const response = await fetch(`${config.API_URL}/assignment-history`);
       const result = await response.json();
       
       if (response.ok && result.success) {
@@ -644,7 +645,7 @@ const ServiceNowScanner = () => {
     setUndoingAssignment(assignmentId);
     try {
       console.log('Sending undo request for assignment:', assignmentId);
-      const response = await fetch('http://localhost:5000/undo-assignment', {
+      const response = await fetch(`${config.API_URL}/undo-assignment`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
