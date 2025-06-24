@@ -811,19 +811,36 @@ def undo_assignment():
     session = create_session()
     try:
         data = request.get_json()
-        instance_url = data.get('instance_url')
+        instance_url = data.get('instance_url', '').rstrip('/')  # Normalize URL by removing trailing slash
         username = data.get('username')
         password = data.get('password')
         assignment_id = data.get('assignment_id')
         
-        if not all([instance_url, username, password, assignment_id]):
-            return jsonify({'error': 'Missing required parameters'}), 400
+        logger.info(f"Received undo request for assignment ID: {assignment_id}")
+        
+        if not all([instance_url, username, password, assignment_id is not None]):
+            missing_params = [k for k, v in {'instance_url': instance_url, 'username': username, 
+                                           'password': password, 'assignment_id': assignment_id}.items() if v is None]
+            error_msg = f"Missing required parameters: {', '.join(missing_params)}"
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 400
+            
+        # Convert assignment_id to int if it's not already
+        try:
+            assignment_id = int(assignment_id)
+        except (TypeError, ValueError):
+            error_msg = f"Invalid assignment ID format: {assignment_id}"
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 400
             
         # Find the assignment record
         assignment = next((a for a in assignment_history if a['id'] == assignment_id), None)
         if not assignment:
+            logger.error(f"Assignment ID {assignment_id} not found in history")
             return jsonify({'error': 'Assignment record not found'}), 404
             
+        logger.info(f"Found assignment record for CI: {assignment['ci_name']}")
+        
         # First verify the current state of the CI
         ci_url = f"{instance_url}/api/now/table/cmdb_ci/{assignment['ci_id']}"
         try:

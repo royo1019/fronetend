@@ -541,6 +541,7 @@ const ServiceNowScanner = () => {
 
     setUndoingAssignment(assignmentId);
     try {
+      console.log('Sending undo request for assignment:', assignmentId);
       const response = await fetch('http://localhost:5000/undo-assignment', {
         method: 'POST',
         headers: {
@@ -550,11 +551,12 @@ const ServiceNowScanner = () => {
           instance_url: formData.instanceUrl,
           username: formData.username,
           password: formData.password,
-          assignment_id: assignmentId
+          assignment_id: Number(assignmentId) // Ensure it's a number
         }),
       });
 
       const result = await response.json();
+      console.log('Undo response:', result);
       
       if (response.ok && result.success) {
         // Refresh the history
@@ -580,11 +582,13 @@ const ServiceNowScanner = () => {
           }
         }
       } else {
-        alert(result.error || 'Failed to undo assignment');
+        const errorMessage = result.error || 'Failed to undo assignment';
+        console.error('Undo failed:', errorMessage);
+        alert(errorMessage);
       }
     } catch (error) {
       console.error('Error during undo:', error);
-      alert('Network error while undoing assignment');
+      alert('Network error while undoing assignment. Please check the console for details.');
     } finally {
       setUndoingAssignment(null);
     }
