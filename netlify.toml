@@ -1,0 +1,15 @@
+[build]
+  base = "cmdb-analyzer"
+  command = "npm run build"
+  publish = "cmdb-analyzer/dist"
+
+[[redirects]]
+  from = "/api/*"
+  to = "http://cmdb-backend-final.eba-pp2diqpq.us-east-1.elasticbeanstalk.com/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
